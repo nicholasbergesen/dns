@@ -24,5 +24,4 @@ I'm using Google's 8.8.8.8 name server as my foreign server.
 ## Outstanding items
 - Add a cache
 - Handle parsing for different RData types
-- Load a config file to set an output for the logs, different foreign name server and enable/disable using go routines.
 - Handle truncated messages
