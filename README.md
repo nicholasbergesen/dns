@@ -25,3 +25,4 @@ I'm using Google's 8.8.8.8 name server as my foreign server.
 - I still need to implement a cache
 - There's a logging bug where some cases of RData arne'n't uncompressed correctly when trying to display. This doesn't affect the core working of the DNS server is superficial.
 - Load a config file to set an output for the logs, different foreign name server and enable/disable using go routines.
+- Handle truncated messages
