@@ -1,7 +1,7 @@
 # DNS
 Golang Implementation of a dns server based on the RFC doc https://www.ietf.org/rfc/rfc1035.txt
 
-This implementation is attempts to create the simplest architecture shown below:
+This implementation is attempts to create the simplest architecture shown belo1w:
 
                  Local Host                        |  Foreign
                                                    |
@@ -18,6 +18,8 @@ This implementation is attempts to create the simplest architecture shown below:
                               +----------+         |
                               |  cache   |         |
                               +----------+         |
+
+I'm using Google's 8.8.8.8 name server as my foreign server.
 
 ## Outstanding items
 - I still need to implement a cache
