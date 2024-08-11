@@ -42,9 +42,10 @@ var RCodeMap = map[uint8]string{
 
 // DNSQuestion represents a question section in the DNS message
 type DNSQuestion struct {
-	QName  string
-	QType  uint16
-	QClass uint16
+	QName       string
+	QNameLength int
+	QType       uint16
+	QClass      uint16
 }
 
 var QRMap = map[bool]string{
@@ -154,7 +155,7 @@ func (h *DNSHeader) ToBytes() []byte {
 // ParseQuestion parses the question section from a byte slice
 func ParseQuestion(data []byte, offset int) (DNSQuestion, int) {
 	question := DNSQuestion{}
-
+	startOffset := offset
 	// Read the QName (domain name)
 	var qnameParts []string
 	for {
@@ -167,6 +168,7 @@ func ParseQuestion(data []byte, offset int) (DNSQuestion, int) {
 		qnameParts = append(qnameParts, string(data[offset:offset+length]))
 		offset += length
 	}
+	question.QNameLength = offset - startOffset
 	question.QName = strings.Join(qnameParts, ".")
 
 	// Read QType and QClass
@@ -207,19 +209,8 @@ func (q *DNSQuestion) ToBytes() []byte {
 func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
 	record := DNSResourceRecord{}
 
-	// Read the Name (domain name)
-	var nameParts []string
-	for {
-		length := int(data[offset])
-		if length == 0 {
-			offset++
-			break
-		}
-		offset++
-		nameParts = append(nameParts, string(data[offset:offset+length]))
-		offset += length
-	}
-	record.Name = fmt.Sprintf("%s.", nameParts)
+	// Read the Name (domain name) using message compression
+	record.Name, offset = readDomainName(data, offset)
 
 	// Read Type, Class, TTL, RDLength, and RData
 	record.Type = binary.BigEndian.Uint16(data[offset : offset+2])
@@ -231,6 +222,37 @@ func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
 	offset += int(record.RDLength)
 
 	return record, offset
+}
+
+// readDomainName reads a domain name from the byte slice with support for message compression
+func readDomainName(data []byte, offset int) (string, int) {
+	var nameParts []string
+	for {
+		length := int(data[offset])
+
+		// Check for the compression pointer (first two bits are 1s)
+		if length&0xC0 == 0xC0 {
+			// Read the offset of the compressed name
+			ptrOffset := int(binary.BigEndian.Uint16(data[offset:offset+2]) & 0x3FFF)
+			offset += 2
+
+			// Recursively read the domain name from the pointer offset
+			compressedName, _ := readDomainName(data, ptrOffset)
+			nameParts = append(nameParts, compressedName)
+			break
+		}
+
+		if length == 0 {
+			offset++
+			break
+		}
+
+		offset++
+		nameParts = append(nameParts, string(data[offset:offset+length]))
+		offset += length
+	}
+
+	return strings.Join(nameParts, "."), offset
 }
 
 // ToBytes converts the DNSResourceRecord struct back into a byte slice
@@ -280,7 +302,6 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		questions = append(questions, question)
 		offset = newOffset
 	}
-	questionOffset := offset // Used to skip ahead to the RR in the upstream response
 
 	// Build the DNS request to send to the upstream server
 	requestHeader := header.ToBytes()
@@ -325,19 +346,19 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	}
 	fmt.Printf("  [%d] Results QDCount (Expect 1):%d ANCount:%d NSCount:%d ARCount:%d \n", responseHeader.ID, responseHeader.QDCount, responseHeader.ANCount, responseHeader.NSCount, responseHeader.ARCount)
 	// Parse the Response DNS question, its the same as the question we sent them, use questionOffset to skip ahead
-	// responseOffset := 12
-	// var responseQuestions []DNSQuestion
-	// for i := 0; i < int(responseHeader.QDCount); i++ {
-	// 	responseQuestion, newOffset := ParseQuestion(response, responseOffset)
-	// 	fmt.Printf("  [%d] Handling question for: Name: %s Type: %s Class: %s \n", responseHeader.ID, responseQuestion.QName, QTypeMap[responseQuestion.QType], QClassMap[responseQuestion.QClass])
-	// 	responseQuestions = append(responseQuestions, responseQuestion)
-	// 	responseOffset = newOffset
-	// }
+	responseOffset := 12
+
+	var responseQuestions []DNSQuestion
+	for i := 0; i < int(responseHeader.QDCount); i++ {
+		responseQuestion, newOffset := ParseQuestion(response, responseOffset)
+		fmt.Printf("  [%d] Handling question for: Name: %s Type: %s Class: %s \n", responseHeader.ID, responseQuestion.QName, QTypeMap[responseQuestion.QType], QClassMap[responseQuestion.QClass])
+		responseQuestions = append(responseQuestions, responseQuestion)
+		responseOffset = newOffset
+	}
 
 	var records []DNSResourceRecord
-	offset = questionOffset
 	for i := 0; i < int(responseHeader.ANCount); i++ {
-		record, newOffset := ParseResourceRecord(response, offset)
+		record, newOffset := ParseResourceRecord(response, responseOffset)
 		fmt.Printf("  [%d] Handling answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %v\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RData)
 		records = append(records, record)
 		offset = newOffset
