@@ -22,7 +22,7 @@ This implementation is attempts to create the simplest architecture shown below:
 I'm using Google's 8.8.8.8 name server as my foreign server.
 
 ## Outstanding items
-- I still need to implement a cache
+- Add a cache
 - Handle parsing for different RData types
 - Load a config file to set an output for the logs, different foreign name server and enable/disable using go routines.
 - Handle truncated messages
