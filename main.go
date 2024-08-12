@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -220,16 +221,31 @@ func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
 	record.RDLength = binary.BigEndian.Uint16(data[offset+8 : offset+10])
 	offset += 10
 	record.RData = data[offset : offset+int(record.RDLength)]
-	uncompressed, offset := readDomainName(data, offset)
-	record.RDataUncompressed = uncompressed
+	if record.RDLength == 4 {
+		record.RDataUncompressed = byteArrayToString(record.RData)
+	} else {
+		record.RDataUncompressed, offset = readDomainName(data, offset)
+	}
 
 	return record, offset
+}
+
+func byteArrayToString(data []byte) string {
+	parts := make([]string, 4)
+	for i := 0; i < len(data); i++ {
+		parts[i] = strconv.Itoa(int(data[i]))
+	}
+	return strings.Join(parts, ".")
 }
 
 // readDomainName reads a domain name from the byte slice with support for message compression
 func readDomainName(data []byte, offset int) (string, int) {
 	var nameParts []string
 	for {
+		if offset >= len(data) {
+			break
+		}
+
 		length := int(data[offset])
 
 		// Check for the compression pointer (first two bits are 1s)
@@ -418,6 +434,6 @@ func main() {
 		}
 
 		// Handle the DNS request in a separate goroutine
-		go handleDNSRequest(conn, addr, buffer[:n])
+		handleDNSRequest(conn, addr, buffer[:n])
 	}
 }
