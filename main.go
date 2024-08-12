@@ -7,7 +7,11 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// Cache
+var cache = make(map[string]DNSResourceRecord, 10000)
 
 // DNSHeader represents the DNS packet header
 type DNSHeader struct {
@@ -91,6 +95,7 @@ type DNSResourceRecord struct {
 	Type              uint16
 	Class             uint16
 	TTL               uint32
+	CreationDate      time.Time
 	RDLength          uint16
 	RData             []byte
 	RDataUncompressed string
@@ -218,6 +223,7 @@ func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
 	record.Type = binary.BigEndian.Uint16(data[offset : offset+2])
 	record.Class = binary.BigEndian.Uint16(data[offset+2 : offset+4])
 	record.TTL = binary.BigEndian.Uint32(data[offset+4 : offset+8])
+	record.CreationDate = time.Now().UTC()
 	record.RDLength = binary.BigEndian.Uint16(data[offset+8 : offset+10])
 	offset += 10
 	record.RData = data[offset : offset+int(record.RDLength)]
@@ -321,6 +327,24 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		offset = newOffset
 	}
 
+	// Check if the DNS query is in the cache
+	cacheValue, ok := cache[questions[0].QName]
+
+	if ok {
+		fmt.Printf("  [%d] Cache hit for %s\n", header.ID, questions[0].QName)
+		if time.Now().UTC().After(cacheValue.CreationDate.Add(time.Duration(cacheValue.TTL) * time.Second)) {
+			cache[questions[0].QName] = DNSResourceRecord{}
+			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", header.ID, questions[0].QName)
+		} else {
+			// Send the response back to the client
+			_, err := conn.WriteToUDP(cacheValue.ToBytes(), addr)
+			if err != nil {
+				log.Printf("Failed to send DNS response to client: %v", err)
+			}
+			return
+		}
+	}
+
 	// Build the DNS request to send to the upstream server
 	requestHeader := header.ToBytes()
 	var requestBody []byte
@@ -393,6 +417,10 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		fmt.Printf("  [%d] ARC Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
 		records = append(records, record)
 		offset = newOffset
+	}
+
+	if !ok {
+		cache[questions[0].QName] = records[0]
 	}
 
 	// Send the response back to the client
