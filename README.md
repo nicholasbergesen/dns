@@ -22,5 +22,6 @@ This implementation is attempts to create the simplest architecture shown below:
 I'm using Google's 8.8.8.8 name server as my foreign server.
 
 ## Outstanding items
-- I still need to implement a cache
-- There's a logging bug where some cases of RData arne'n't uncompressed correctly when trying to display. This doesn't affect the core working of the DNS server is superficial.
+- Add a cache
+- Handle parsing for different RData types
+- Handle truncated messages
