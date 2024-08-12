@@ -22,6 +22,4 @@ This implementation is attempts to create the simplest architecture shown below:
 I'm using Google's 8.8.8.8 name server as my foreign server.
 
 ## Outstanding items
-- Add a cache
-- Handle parsing for different RData types
-- Handle truncated messages
+- Fix cache response errors
