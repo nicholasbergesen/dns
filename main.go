@@ -11,7 +11,34 @@ import (
 )
 
 // Cache
-var cache = make(map[string]DNSResourceRecord, 10000)
+var cache = make(map[string]DNSMessage, 10000)
+
+type DNSMessage struct {
+	Header    DNSHeader
+	Questions []DNSQuestion
+	Answers   []DNSResourceRecord
+}
+
+func (m *DNSMessage) ToBytes() []byte {
+	bytes := m.Header.ToBytes()
+	for _, question := range m.Questions {
+		bytes = append(bytes, question.ToBytes()...)
+	}
+	for _, answer := range m.Answers {
+		bytes = append(bytes, answer.ToBytes()...)
+	}
+
+	return bytes
+}
+
+func (m *DNSMessage) UpstreamBytes() []byte {
+	bytes := m.Header.ToBytes()
+	for _, question := range m.Questions {
+		bytes = append(bytes, question.ToBytes()...)
+	}
+
+	return bytes
+}
 
 // DNSHeader represents the DNS packet header
 type DNSHeader struct {
@@ -314,27 +341,29 @@ func (r *DNSResourceRecord) ToBytes() []byte {
 
 func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	// Parse the DNS header
-	header := ParseHeader(msg)
-	fmt.Printf("Received DNS Query ID: %d\n", header.ID)
+	message := DNSMessage{}
+	message.Header = ParseHeader(msg)
+	fmt.Printf("Received DNS Query ID: %d\n", message.Header.ID)
 
 	// Parse the DNS question
 	offset := 12
-	var questions []DNSQuestion
-	for i := 0; i < int(header.QDCount); i++ {
+
+	for i := 0; i < int(message.Header.QDCount); i++ {
 		question, newOffset := ParseQuestion(msg, offset)
-		fmt.Printf("  [%d] Handling question for: Name: %s Type: %s Class: %s \n", header.ID, question.QName, QTypeMap[question.QType], QClassMap[question.QClass])
-		questions = append(questions, question)
+		fmt.Printf("  [%d] Handling question for: Name: %s Type: %s Class: %s \n", message.Header.ID, question.QName, QTypeMap[question.QType], QClassMap[question.QClass])
+		message.Questions = append(message.Questions, question)
 		offset = newOffset
 	}
 
 	// Check if the DNS query is in the cache
-	cacheValue, ok := cache[questions[0].QName]
+	qName := message.Questions[0].QName
+	cacheValue, ok := cache[qName]
 
 	if ok {
-		fmt.Printf("  [%d] Cache hit for %s\n", header.ID, questions[0].QName)
-		if time.Now().UTC().After(cacheValue.CreationDate.Add(time.Duration(cacheValue.TTL) * time.Second)) {
-			cache[questions[0].QName] = DNSResourceRecord{}
-			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", header.ID, questions[0].QName)
+		fmt.Printf("  [%d] Cache hit for %s\n", message.Header.ID, qName)
+		if time.Now().UTC().After(message.Answers[0].CreationDate.Add(time.Duration(message.Answers[0].TTL) * time.Second)) {
+			cache[qName] = DNSMessage{}
+			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
 			// Send the response back to the client
 			_, err := conn.WriteToUDP(cacheValue.ToBytes(), addr)
@@ -344,15 +373,6 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 			return
 		}
 	}
-
-	// Build the DNS request to send to the upstream server
-	requestHeader := header.ToBytes()
-	var requestBody []byte
-
-	for _, question := range questions {
-		requestBody = append(requestBody, question.ToBytes()...)
-	}
-	upstreamRequest := append(requestHeader, requestBody...)
 
 	// Forward the request to the upstream DNS server
 	upstreamAddr, err := net.ResolveUDPAddr("udp", upstream)
@@ -366,7 +386,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	defer upstreamConn.Close()
 
 	// Send the request to the upstream DNS server
-	_, err = upstreamConn.Write(upstreamRequest)
+	_, err = upstreamConn.Write(message.UpstreamBytes())
 	if err != nil {
 		log.Printf("Failed to send DNS request to upstream server: %v", err)
 		return
@@ -389,38 +409,35 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	fmt.Printf("  [%d] Results QDCount (Expect 1):%d ANCount:%d NSCount:%d ARCount:%d \n", responseHeader.ID, responseHeader.QDCount, responseHeader.ANCount, responseHeader.NSCount, responseHeader.ARCount)
 	responseOffset := 12
 
-	var responseQuestions []DNSQuestion
 	for i := 0; i < int(responseHeader.QDCount); i++ {
 		responseQuestion, newOffset := ParseQuestion(response, responseOffset)
 		fmt.Printf("  [%d] Question for: Name: %s Type: %s Class: %s \n", responseHeader.ID, responseQuestion.QName, QTypeMap[responseQuestion.QType], QClassMap[responseQuestion.QClass])
-		responseQuestions = append(responseQuestions, responseQuestion)
 		responseOffset = newOffset
 	}
 
-	var records []DNSResourceRecord
 	for i := 0; i < int(responseHeader.ANCount); i++ {
 		record, newOffset := ParseResourceRecord(response, responseOffset)
 		fmt.Printf("  [%d] AN Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
-		records = append(records, record)
-		offset = newOffset
+		message.Answers = append(message.Answers, record)
+		responseOffset = newOffset
 	}
 
 	for i := 0; i < int(responseHeader.NSCount); i++ {
 		record, newOffset := ParseResourceRecord(response, responseOffset)
 		fmt.Printf("  [%d] NS Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
-		records = append(records, record)
-		offset = newOffset
+		message.Answers = append(message.Answers, record)
+		responseOffset = newOffset
 	}
 
 	for i := 0; i < int(responseHeader.ARCount); i++ {
 		record, newOffset := ParseResourceRecord(response, responseOffset)
 		fmt.Printf("  [%d] ARC Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
-		records = append(records, record)
-		offset = newOffset
+		message.Answers = append(message.Answers, record)
+		responseOffset = newOffset
 	}
 
 	if !ok {
-		cache[questions[0].QName] = records[0]
+		cache[qName] = message
 	}
 
 	// Send the response back to the client
