@@ -19,7 +19,4 @@ This implementation is attempts to create the simplest architecture shown below:
                               |  cache   |         |
                               +----------+         |
 
-I'm using Google's 8.8.8.8 name server as my foreign server.
-
-## Outstanding items
-- Fix cache response errors
+Google's 8.8.8.8 name server is used as the foreign server.

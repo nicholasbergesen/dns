@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -242,6 +243,8 @@ func (q *DNSQuestion) ToBytes() []byte {
 // ParseResourceRecord parses a resource record from a byte slice
 func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
 	record := DNSResourceRecord{}
+	// Write the bytes to the file
+	bytesToFile(data, offset)
 
 	// Read the Name (domain name) using message compression
 	record.Name, offset = readDomainName(data, offset)
@@ -257,10 +260,25 @@ func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
 	if record.RDLength == 4 {
 		record.RDataUncompressed = byteArrayToString(record.RData)
 	} else {
+		bytesToFile(data, offset)
 		record.RDataUncompressed, offset = readDomainName(data, offset)
 	}
 
 	return record, offset
+}
+
+func bytesToFile(data []byte, offset int) {
+	fi, err := os.OpenFile("bytes.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatalf("Failed to open file: %v", err)
+	}
+	defer fi.Close()
+
+	_, err = fi.Write([]byte(fmt.Sprintf("ParseResourceRecord:%d:%x\n", offset, data)))
+
+	if err != nil {
+		log.Fatalf("Failed to write bytes to file: %v", err)
+	}
 }
 
 func byteArrayToString(data []byte) string {
@@ -360,8 +378,8 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	cacheValue, ok := cache[qName]
 
 	if ok {
-		fmt.Printf("  [%d] Cache hit for %s\n", message.Header.ID, qName)
-		if time.Now().UTC().After(message.Answers[0].CreationDate.Add(time.Duration(message.Answers[0].TTL) * time.Second)) {
+		fmt.Printf("  [%d] Cache hit for %s\n", cacheValue.Header.ID, qName)
+		if time.Now().UTC().After(cacheValue.Answers[0].CreationDate.Add(time.Duration(cacheValue.Answers[0].TTL) * time.Second)) {
 			cache[qName] = DNSMessage{}
 			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
