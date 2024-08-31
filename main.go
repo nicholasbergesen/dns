@@ -125,11 +125,14 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	cacheValue, ok := cache[qName]
 
 	if ok {
-		fmt.Printf("  [%d] Cache hit for %s\n", cacheValue.Header.ID, qName)
 		if len(cacheValue.Answers) > 0 && time.Now().UTC().After(cacheValue.Answers[0].CreationDate.Add(time.Duration(cacheValue.Answers[0].TTL)*time.Second)) {
 			delete(cache, qName)
 			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
+			cachedBytes := cacheValue.ToBytes()
+			copy(cachedBytes[:2], msg[:2])
+			cacheValue.Header = ParseHeader(cachedBytes)
+			fmt.Printf("  [%d] Cache hit for %s\n", cacheValue.Header.ID, qName)
 			_, err := conn.WriteToUDP(cacheValue.ToBytes(), addr)
 			if err != nil {
 				log.Printf("Failed to send DNS response to client: %v", err)
