@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"time"
+	"strings"
 )
 
-// Cache
 var cache = make(map[string]DNSMessage, 10000)
+var blocked = map[string]bool{}
 
 var RCodeMap = map[uint8]string{
 	0:  "NoError",  // No error condition
@@ -30,12 +30,6 @@ var QRMap = map[bool]string{
 	false: "Request",
 }
 
-var blocked = map[string]bool{
-	// "apple.com":      true,
-	// "www.apple.com":  true,
-	// "www.apple.com.": true,
-}
-
 var QTypeMap = map[uint16]string{
 	1:   "A",
 	2:   "NS",
@@ -53,6 +47,7 @@ var QTypeMap = map[uint16]string{
 	14:  "MINFO",
 	15:  "MX",
 	16:  "TXT",
+	65:  "HTTP", //No implemented, part of newer rfc
 	252: "AXFR",
 	253: "MAILB",
 	254: "MAILA", // Obsolete
@@ -101,7 +96,9 @@ func main() {
 func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	message := DNSMessage{}
 	message.Header = ParseHeader(msg)
-	fmt.Printf("Received DNS Query ID: %d\n", message.Header.ID)
+	offset := HEADER_LENGTH
+
+	fmt.Printf("Received %s from client ID: %d\n", strings.ToLower((QRMap[message.Header.QR])), message.Header.ID)
 
 	if message.Header.Opcode > 2 {
 		fmt.Printf("  [%d] Opcode %d not supported\n", message.Header.ID, message.Header.Opcode)
@@ -113,19 +110,39 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		return
 	}
 
-	offset := HEADER_LENGTH
 	for i := 0; i < int(message.Header.QDCount); i++ {
-		question, newOffset := ParseQuestion(msg, offset)
+		question := ParseQuestion(msg, &offset)
 		fmt.Printf("  [%d] Handling question for: Name: %s Type: %s TypeLiteral: %d Class: %s \n", message.Header.ID, question.QName, QTypeMap[question.QType], question.QType, QClassMap[question.QClass])
+
 		message.Questions = append(message.Questions, question)
-		offset = newOffset
+
+		if question.QType == 65 { //HTTP
+			fmt.Printf("  [%d] Refuse HTTP request for domain: %s\n", message.Header.ID, question.QName)
+			message.Header.RCODE = 5 // Refused
+			_, err := conn.WriteToUDP(message.ToBytes(), addr)
+			if err != nil {
+				log.Printf("Failed to send DNS response to client: %v", err)
+			}
+			return
+		}
+
+		_, isBlocked := blocked[question.QName]
+		if isBlocked {
+			fmt.Printf("  [%d] Blocked domain: %s\n", message.Header.ID, question.QName)
+			message.Header.RCODE = 3 // NXDomain
+			_, err := conn.WriteToUDP(message.ToBytes(), addr)
+			if err != nil {
+				log.Printf("Failed to send DNS response to client: %v", err)
+			}
+			return
+		}
 	}
 
 	qName := message.Questions[0].QName
-	cacheValue, ok := cache[qName]
+	cacheValue, isInCache := cache[qName]
 
-	if ok {
-		if len(cacheValue.Answers) > 0 && time.Now().UTC().After(cacheValue.Answers[0].CreationDate.Add(time.Duration(cacheValue.Answers[0].TTL)*time.Second)) {
+	if isInCache {
+		if cacheValue.IsExpired() {
 			delete(cache, qName)
 			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
@@ -139,72 +156,33 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		}
 	}
 
-	_, isBlocked := blocked[message.Questions[0].QName]
-	response := make([]byte, 512)
-	n := len(message.ToBytes())
-	if isBlocked {
-		fmt.Printf("Blocked domain: %s\n", message.Questions[0].QName)
-		message.Header.RCODE = 3 // NXDomain
-		response = message.ToBytes()
-	} else {
-		// Forward the request to the upstream DNS server
-		upstreamAddr, err := net.ResolveUDPAddr("udp", UPSTREAM)
-		if err != nil {
-			log.Fatalf("Failed to resolve upstream DNS server address: %v", err)
-		}
-		upstreamConn, err := net.DialUDP("udp", nil, upstreamAddr)
-		if err != nil {
-			log.Fatalf("Failed to connect to upstream DNS server: %v", err)
-		}
-		defer upstreamConn.Close()
-
-		_, err = upstreamConn.Write(message.UpstreamBytes())
-		if err != nil {
-			log.Printf("Failed to send DNS request to upstream server: %v", err)
-			return
-		}
-
-		n, _, err = upstreamConn.ReadFromUDP(response)
-		if err != nil {
-			log.Printf("Failed to receive DNS response from upstream server: %v", err)
-			return
-		}
-	}
+	response, n := GetUpstreamResponse(message)
 
 	responseHeader := ParseHeader((response[:HEADER_LENGTH]))
-	fmt.Printf("  [%d] Received DNS %s from upstream.\n", responseHeader.ID, QRMap[responseHeader.QR])
-	fmt.Printf("  [%d] %s\n", responseHeader.ID, RCodeMap[(responseHeader.RCODE)])
+	fmt.Printf("  [%d] Received %s %s from upstream server.\n", responseHeader.ID, RCodeMap[(responseHeader.RCODE)], strings.ToLower((QRMap[responseHeader.QR])))
 	fmt.Printf("  [%d] Results QDCount (Expect 1):%d ANCount:%d NSCount:%d ARCount:%d \n", responseHeader.ID, responseHeader.QDCount, responseHeader.ANCount, responseHeader.NSCount, responseHeader.ARCount)
-	responseOffset := HEADER_LENGTH
 
-	for i := 0; i < int(responseHeader.QDCount); i++ {
-		responseQuestion, newOffset := ParseQuestion(response, responseOffset)
-		fmt.Printf("  [%d] Question for: Name: %s Type: %s Class: %s \n", responseHeader.ID, responseQuestion.QName, QTypeMap[responseQuestion.QType], QClassMap[responseQuestion.QClass])
-		responseOffset = newOffset
+	if responseHeader.RCODE == 0 {
+		for i := 0; i < int(responseHeader.ANCount); i++ {
+			record := ParseResourceRecord(response, &offset)
+			message.Answers = append(message.Answers, record)
+			fmt.Printf("  [%d]   AN Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
+		}
+
+		for i := 0; i < int(responseHeader.NSCount); i++ {
+			var record = ParseResourceRecord(response, &offset)
+			message.Answers = append(message.Answers, record)
+			fmt.Printf("  [%d]   NS Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
+		}
+
+		for i := 0; i < int(responseHeader.ARCount); i++ {
+			var record = ParseResourceRecord(response, &offset)
+			message.Answers = append(message.Answers, record)
+			fmt.Printf("  [%d]   ARC Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
+		}
 	}
 
-	for i := 0; i < int(responseHeader.ANCount); i++ {
-		record, newOffset := ParseResourceRecord(response, responseOffset)
-		fmt.Printf("  [%d] AN Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
-		message.Answers = append(message.Answers, record)
-		responseOffset = newOffset
-	}
-
-	for i := 0; i < int(responseHeader.NSCount); i++ {
-		record, newOffset := ParseResourceRecord(response, responseOffset)
-		fmt.Printf("  [%d] NS Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
-		message.Answers = append(message.Answers, record)
-		responseOffset = newOffset
-	}
-
-	for i := 0; i < int(responseHeader.ARCount); i++ {
-		record, newOffset := ParseResourceRecord(response, responseOffset)
-		fmt.Printf("  [%d] ARC Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, QTypeMap[record.Type], QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
-		message.Answers = append(message.Answers, record)
-		responseOffset = newOffset
-	}
-
-	if !ok {
+	if !isInCache {
 		cache[qName] = message
 	}
 
@@ -213,4 +191,31 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		log.Printf("Failed to send DNS response to client: %v", err)
 		return
 	}
+}
+
+func GetUpstreamResponse(message DNSMessage) ([]byte, int) {
+	// Forward the request to the upstream DNS server
+	upstreamAddr, err := net.ResolveUDPAddr("udp", UPSTREAM)
+	if err != nil {
+		log.Fatalf("Failed to resolve upstream DNS server address: %v", err)
+	}
+	upstreamConn, err := net.DialUDP("udp", nil, upstreamAddr)
+	if err != nil {
+		log.Fatalf("Failed to connect to upstream DNS server: %v", err)
+	}
+	defer upstreamConn.Close()
+
+	_, err = upstreamConn.Write(message.UpstreamBytes())
+	response := make([]byte, 512)
+	if err != nil {
+		log.Printf("Failed to send DNS request to upstream server: %v", err)
+		return response, 0
+	}
+	n, _, err := upstreamConn.ReadFromUDP(response)
+	if err != nil {
+		log.Printf("Failed to receive DNS response from upstream server: %v", err)
+		return response, 0
+	}
+
+	return response, n
 }

@@ -6,10 +6,32 @@ import (
 )
 
 type DNSQuestion struct {
-	QName       string
-	QNameLength int
-	QType       uint16
-	QClass      uint16
+	QName  string
+	QType  uint16
+	QClass uint16
+}
+
+func ParseQuestion(data []byte, offset *int) DNSQuestion {
+	question := DNSQuestion{}
+	var qnameParts []string
+	for {
+		length := int(data[*offset])
+		if length == 0 {
+			*offset++
+			break
+		}
+		*offset++
+		qnameParts = append(qnameParts, string(data[*offset:*offset+length]))
+		*offset += length
+	}
+
+	question.QName = strings.Join(qnameParts, ".")
+
+	question.QType = binary.BigEndian.Uint16(data[*offset : *offset+2])
+	question.QClass = binary.BigEndian.Uint16(data[*offset+2 : *offset+4])
+	*offset += 4
+
+	return question
 }
 
 func (q *DNSQuestion) ToBytes() []byte {
