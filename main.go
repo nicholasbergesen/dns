@@ -154,7 +154,7 @@ func ParseHeader(data []byte) DNSHeader {
 
 // ToBytes converts the DNSHeader struct back into a byte slice
 func (h *DNSHeader) ToBytes() []byte {
-	data := make([]byte, 12)
+	data := make([]byte, HEADER_LENGTH)
 
 	binary.BigEndian.PutUint16(data[0:2], h.ID)
 
@@ -243,8 +243,6 @@ func (q *DNSQuestion) ToBytes() []byte {
 // ParseResourceRecord parses a resource record from a byte slice
 func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
 	record := DNSResourceRecord{}
-	// Write the bytes to the file
-	bytesToFile(data, offset)
 
 	// Read the Name (domain name) using message compression
 	record.Name, offset = readDomainName(data, offset)
@@ -257,10 +255,11 @@ func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
 	record.RDLength = binary.BigEndian.Uint16(data[offset+8 : offset+10])
 	offset += 10
 	record.RData = data[offset : offset+int(record.RDLength)]
-	if record.RDLength == 4 {
+
+	if QTypeMap[record.Type] == "A" {
 		record.RDataUncompressed = byteArrayToString(record.RData)
+		offset += int(record.RDLength)
 	} else {
-		bytesToFile(data, offset)
 		record.RDataUncompressed, offset = readDomainName(data, offset)
 	}
 
@@ -292,7 +291,6 @@ func byteArrayToString(data []byte) string {
 // readDomainName reads a domain name from the byte slice with support for message compression
 func readDomainName(data []byte, offset int) (string, int) {
 	var nameParts []string
-	fmt.Printf("readDomainName:offset:%d\n", offset)
 	if offset >= len(data) {
 		fmt.Printf("OOPS! offset exceeded data Length, looks like there's a bug\n")
 		return strings.Join(nameParts, "."), offset
@@ -314,7 +312,6 @@ func readDomainName(data []byte, offset int) (string, int) {
 
 		// Recursively read the domain name from the pointer offset
 		compressedName, _ := readDomainName(data, ptrOffset)
-		fmt.Printf("compressedName:%s\n", compressedName)
 		nameParts = append(nameParts, compressedName)
 		return compressedName, offset
 	}
@@ -376,9 +373,13 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		return
 	}
 
-	// Parse the DNS question
-	offset := 12
+	if message.Header.Z != 0 {
+		fmt.Printf("  [%d] Z must be zero but value is %d\n", message.Header.ID, message.Header.Z)
+		return
+	}
 
+	// Parse the DNS question
+	offset := HEADER_LENGTH
 	for i := 0; i < int(message.Header.QDCount); i++ {
 		question, newOffset := ParseQuestion(msg, offset)
 		fmt.Printf("  [%d] Handling question for: Name: %s Type: %s Class: %s \n", message.Header.ID, question.QName, QTypeMap[question.QType], QClassMap[question.QClass])
@@ -393,7 +394,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	if ok {
 		fmt.Printf("  [%d] Cache hit for %s\n", cacheValue.Header.ID, qName)
 		if time.Now().UTC().After(cacheValue.Answers[0].CreationDate.Add(time.Duration(cacheValue.Answers[0].TTL) * time.Second)) {
-			cache[qName] = DNSMessage{}
+			delete(cache, qName)
 			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
 			// Send the response back to the client
@@ -406,7 +407,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	}
 
 	// Forward the request to the upstream DNS server
-	upstreamAddr, err := net.ResolveUDPAddr("udp", upstream)
+	upstreamAddr, err := net.ResolveUDPAddr("udp", UPSTREAM)
 	if err != nil {
 		log.Fatalf("Failed to resolve upstream DNS server address: %v", err)
 	}
@@ -431,14 +432,14 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		return
 	}
 
-	responseHeader := ParseHeader((response[:12]))
+	responseHeader := ParseHeader((response[:HEADER_LENGTH]))
 	fmt.Printf("  [%d] Received DNS %s ID from upstream.\n", responseHeader.ID, QRMap[responseHeader.QR])
 	fmt.Printf("  [%d] %s\n", responseHeader.ID, RCodeMap[(responseHeader.RCODE)])
 	if responseHeader.RD {
 		fmt.Printf("  [%d] Recursion desired\n", responseHeader.ID)
 	}
 	fmt.Printf("  [%d] Results QDCount (Expect 1):%d ANCount:%d NSCount:%d ARCount:%d \n", responseHeader.ID, responseHeader.QDCount, responseHeader.ANCount, responseHeader.NSCount, responseHeader.ARCount)
-	responseOffset := 12
+	responseOffset := HEADER_LENGTH
 
 	for i := 0; i < int(responseHeader.QDCount); i++ {
 		responseQuestion, newOffset := ParseQuestion(response, responseOffset)
@@ -479,12 +480,13 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	}
 }
 
-const upstream = "8.8.8.8:53" // Google's public DNS server
-const port = ":53"
+const UPSTREAM = "8.8.8.8:53" // Google's public DNS server
+const PORT = ":53"
+const HEADER_LENGTH = 12
 
 func main() {
 	// Resolve UDP address for the DNS server
-	udpAddr, err := net.ResolveUDPAddr("udp", "0.0.0.0"+port)
+	udpAddr, err := net.ResolveUDPAddr("udp", "0.0.0.0"+PORT)
 	if err != nil {
 		log.Fatalf("Failed to resolve UDP address: %v", err)
 	}
@@ -496,7 +498,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	log.Printf("DNS server started on %s", port)
+	log.Printf("DNS server started on %s", PORT)
 
 	for {
 		// Buffer to store incoming DNS requests
@@ -508,7 +510,7 @@ func main() {
 			log.Printf("Failed to read DNS request: %v", err)
 			continue
 		}
-		logRequest(buffer[:n])
+		//logRequest(buffer[:n])
 
 		// Handle the DNS request in a separate goroutine
 		handleDNSRequest(conn, addr, buffer[:n])

@@ -33,3 +33,13 @@ func TestReadCompressedMessage(t *testing.T) {
 	name, _ := readDomainName(bytes, 40)
 	t.Logf("Name: %s", name)
 }
+
+// Z 2, not supported, should always be 0
+func TestFailedRequest(t *testing.T) {
+	message := DNSMessage{}
+	bytes := []byte("P        www netflixcom  A ")
+	message.Header = ParseHeader(bytes)
+	t.Logf("Bytes: %d", len(bytes))
+	t.Logf("ID: %d", message.Header.ID)
+	handleDNSRequest(nil, nil, bytes)
+}
