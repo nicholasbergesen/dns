@@ -541,7 +541,7 @@ func main() {
 		//logRequest(buffer[:n])
 
 		// Handle the DNS request in a separate goroutine
-		handleDNSRequest(conn, addr, buffer[:n])
+		go handleDNSRequest(conn, addr, buffer[:n])
 	}
 }
 
