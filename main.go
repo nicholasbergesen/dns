@@ -86,6 +86,12 @@ var QRMap = map[bool]string{
 	false: "Request",
 }
 
+var blocked = map[string]bool{
+	"apple.com":      true,
+	"www.apple.com":  true,
+	"www.apple.com.": true,
+}
+
 var QTypeMap = map[uint16]string{
 	1:   "A",
 	2:   "NS",
@@ -281,6 +287,10 @@ func bytesToFile(data []byte, offset int) {
 }
 
 func byteArrayToString(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
 	parts := make([]string, 4)
 	for i := 0; i < len(data); i++ {
 		parts[i] = strconv.Itoa(int(data[i]))
@@ -393,7 +403,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 
 	if ok {
 		fmt.Printf("  [%d] Cache hit for %s\n", cacheValue.Header.ID, qName)
-		if time.Now().UTC().After(cacheValue.Answers[0].CreationDate.Add(time.Duration(cacheValue.Answers[0].TTL) * time.Second)) {
+		if len(cacheValue.Answers) > 0 && time.Now().UTC().After(cacheValue.Answers[0].CreationDate.Add(time.Duration(cacheValue.Answers[0].TTL)*time.Second)) {
 			delete(cache, qName)
 			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
@@ -406,30 +416,37 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		}
 	}
 
-	// Forward the request to the upstream DNS server
-	upstreamAddr, err := net.ResolveUDPAddr("udp", UPSTREAM)
-	if err != nil {
-		log.Fatalf("Failed to resolve upstream DNS server address: %v", err)
-	}
-	upstreamConn, err := net.DialUDP("udp", nil, upstreamAddr)
-	if err != nil {
-		log.Fatalf("Failed to connect to upstream DNS server: %v", err)
-	}
-	defer upstreamConn.Close()
-
-	// Send the request to the upstream DNS server
-	_, err = upstreamConn.Write(message.UpstreamBytes())
-	if err != nil {
-		log.Printf("Failed to send DNS request to upstream server: %v", err)
-		return
-	}
-
-	// Receive the response from the upstream DNS server
+	_, isBlocked := blocked[message.Questions[0].QName]
 	response := make([]byte, 512)
-	n, _, err := upstreamConn.ReadFromUDP(response)
-	if err != nil {
-		log.Printf("Failed to receive DNS response from upstream server: %v", err)
-		return
+	n := len(message.ToBytes())
+	if isBlocked {
+		fmt.Printf("Blocked domain: %s\n", message.Questions[0].QName)
+		response = message.ToBytes()
+	} else {
+		// Forward the request to the upstream DNS server
+		upstreamAddr, err := net.ResolveUDPAddr("udp", UPSTREAM)
+		if err != nil {
+			log.Fatalf("Failed to resolve upstream DNS server address: %v", err)
+		}
+		upstreamConn, err := net.DialUDP("udp", nil, upstreamAddr)
+		if err != nil {
+			log.Fatalf("Failed to connect to upstream DNS server: %v", err)
+		}
+		defer upstreamConn.Close()
+
+		// Send the request to the upstream DNS server
+		_, err = upstreamConn.Write(message.UpstreamBytes())
+		if err != nil {
+			log.Printf("Failed to send DNS request to upstream server: %v", err)
+			return
+		}
+
+		// Receive the response from the upstream DNS server
+		n, _, err = upstreamConn.ReadFromUDP(response)
+		if err != nil {
+			log.Printf("Failed to receive DNS response from upstream server: %v", err)
+			return
+		}
 	}
 
 	responseHeader := ParseHeader((response[:HEADER_LENGTH]))
@@ -473,7 +490,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	}
 
 	// Send the response back to the client
-	_, err = conn.WriteToUDP(response[:n], addr)
+	_, err := conn.WriteToUDP(response[:n], addr)
 	if err != nil {
 		log.Printf("Failed to send DNS response to client: %v", err)
 		return
