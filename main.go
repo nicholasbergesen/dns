@@ -421,6 +421,17 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	n := len(message.ToBytes())
 	if isBlocked {
 		fmt.Printf("Blocked domain: %s\n", message.Questions[0].QName)
+		message.Answers = append(message.Answers, DNSResourceRecord{
+			Name:              message.Questions[0].QName,
+			Type:              message.Questions[0].QType,
+			TTL:               1000,
+			Class:             message.Questions[0].QClass,
+			CreationDate:      time.Now(),
+			RDLength:          4,
+			RData:             []byte{0x7F, 0x00, 0x00, 0x02},
+			RDataUncompressed: "",
+		})
+		message.Header.ANCount = 1
 		response = message.ToBytes()
 	} else {
 		// Forward the request to the upstream DNS server
