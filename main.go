@@ -144,17 +144,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	n := len(message.ToBytes())
 	if isBlocked {
 		fmt.Printf("Blocked domain: %s\n", message.Questions[0].QName)
-		message.Answers = append(message.Answers, DNSResourceRecord{
-			Name:              message.Questions[0].QName,
-			Type:              message.Questions[0].QType,
-			TTL:               1000,
-			Class:             message.Questions[0].QClass,
-			CreationDate:      time.Now(),
-			RDLength:          4,
-			RData:             []byte{0x7F, 0x00, 0x00, 0x02},
-			RDataUncompressed: "",
-		})
-		message.Header.ANCount = 1
+		message.Header.RCODE = 3 // NXDomain
 		response = message.ToBytes()
 	} else {
 		// Forward the request to the upstream DNS server
@@ -182,11 +172,8 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	}
 
 	responseHeader := ParseHeader((response[:HEADER_LENGTH]))
-	fmt.Printf("  [%d] Received DNS %s ID from upstream.\n", responseHeader.ID, QRMap[responseHeader.QR])
+	fmt.Printf("  [%d] Received DNS %s from upstream.\n", responseHeader.ID, QRMap[responseHeader.QR])
 	fmt.Printf("  [%d] %s\n", responseHeader.ID, RCodeMap[(responseHeader.RCODE)])
-	if responseHeader.RD {
-		fmt.Printf("  [%d] Recursion desired\n", responseHeader.ID)
-	}
 	fmt.Printf("  [%d] Results QDCount (Expect 1):%d ANCount:%d NSCount:%d ARCount:%d \n", responseHeader.ID, responseHeader.QDCount, responseHeader.ANCount, responseHeader.NSCount, responseHeader.ARCount)
 	responseOffset := HEADER_LENGTH
 
