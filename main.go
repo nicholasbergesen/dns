@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
+	"os"
 	"strings"
 )
 
 var cache = make(map[string]DNSMessage, 10000)
-var blocked = map[string]bool{}
+var blocked []string
 
 var RCodeMap = map[uint8]string{
 	0:  "NoError",  // No error condition
@@ -72,6 +75,8 @@ func main() {
 		log.Fatalf("Failed to resolve UDP address: %v", err)
 	}
 
+	blocked = LoadBlockedUrls()
+
 	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		log.Fatalf("Failed to start DNS server: %v", err)
@@ -126,15 +131,16 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 			return
 		}
 
-		_, isBlocked := blocked[question.QName]
-		if isBlocked {
-			fmt.Printf("  [%d] Blocked domain: %s\n", message.Header.ID, question.QName)
-			message.Header.RCODE = 3 // NXDomain
-			_, err := conn.WriteToUDP(message.ToBytes(), addr)
-			if err != nil {
-				log.Printf("Failed to send DNS response to client: %v", err)
+		for i := 0; i < len(blocked); i++ {
+			if blocked[i] == question.QName {
+				fmt.Printf("  [%d] Blocked domain: %s\n", message.Header.ID, question.QName)
+				message.Header.RCODE = 3 // NXDomain
+				_, err := conn.WriteToUDP(message.ToBytes(), addr)
+				if err != nil {
+					log.Printf("Failed to send DNS response to client: %v", err)
+				}
+				return
 			}
-			return
 		}
 	}
 
@@ -218,4 +224,29 @@ func GetUpstreamResponse(message DNSMessage) ([]byte, int) {
 	}
 
 	return response, n
+}
+
+func LoadBlockedUrls() []string {
+	var lines []string
+	file, err := os.OpenFile("block.txt", os.O_RDONLY, fs.ModeAppend)
+	defer file.Close()
+
+	if err != nil {
+		fmt.Printf("No block.txt found\n")
+		return lines
+	}
+
+	reader := bufio.NewReader(file)
+	fmt.Printf("Items loaded from block.txt\n")
+	for {
+		line, _, err := reader.ReadLine()
+		fmt.Printf("%s\n", line)
+
+		if err != nil || line == nil {
+			break
+		}
+
+		lines = append(lines, string(line))
+	}
+	return lines
 }
