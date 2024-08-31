@@ -1,7 +1,7 @@
 # DNS
 Golang Implementation of a dns server based on the RFC doc https://www.ietf.org/rfc/rfc1035.txt
 
-This implementation is attempts to create the simplest architecture shown below:
+This implementation attempts to create the simplest architecture shown below:
 
                  Local Host                        |  Foreign
                                                    |
