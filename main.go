@@ -129,9 +129,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 			delete(cache, qName)
 			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
-			cachedBytes := cacheValue.ToBytes()
-			copy(cachedBytes[:2], msg[:2])
-			cacheValue.Header = ParseHeader(cachedBytes)
+			cacheValue.Header.ID = message.Header.ID
 			fmt.Printf("  [%d] Cache hit for %s\n", cacheValue.Header.ID, qName)
 			_, err := conn.WriteToUDP(cacheValue.ToBytes(), addr)
 			if err != nil {
