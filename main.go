@@ -382,7 +382,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	offset := HEADER_LENGTH
 	for i := 0; i < int(message.Header.QDCount); i++ {
 		question, newOffset := ParseQuestion(msg, offset)
-		fmt.Printf("  [%d] Handling question for: Name: %s Type: %s Class: %s \n", message.Header.ID, question.QName, QTypeMap[question.QType], QClassMap[question.QClass])
+		fmt.Printf("  [%d] Handling question for: Name: %s Type: %s TypeLiteral: %d Class: %s \n", message.Header.ID, question.QName, QTypeMap[question.QType], question.QType, QClassMap[question.QClass])
 		message.Questions = append(message.Questions, question)
 		offset = newOffset
 	}
