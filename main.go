@@ -1,62 +1,14 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 )
 
 // Cache
 var cache = make(map[string]DNSMessage, 10000)
-
-type DNSMessage struct {
-	Header    DNSHeader
-	Questions []DNSQuestion
-	Answers   []DNSResourceRecord
-}
-
-func (m *DNSMessage) ToBytes() []byte {
-	bytes := m.Header.ToBytes()
-	for _, question := range m.Questions {
-		bytes = append(bytes, question.ToBytes()...)
-	}
-	for _, answer := range m.Answers {
-		bytes = append(bytes, answer.ToBytes()...)
-	}
-
-	return bytes
-}
-
-func (m *DNSMessage) UpstreamBytes() []byte {
-	bytes := m.Header.ToBytes()
-	for _, question := range m.Questions {
-		bytes = append(bytes, question.ToBytes()...)
-	}
-
-	return bytes
-}
-
-// DNSHeader represents the DNS packet header
-type DNSHeader struct {
-	ID      uint16
-	QR      bool
-	Opcode  uint8
-	AA      bool
-	TC      bool
-	RD      bool
-	RA      bool
-	Z       uint8
-	RCODE   uint8
-	QDCount uint16
-	ANCount uint16
-	NSCount uint16
-	ARCount uint16
-}
 
 var RCodeMap = map[uint8]string{
 	0:  "NoError",  // No error condition
@@ -73,23 +25,15 @@ var RCodeMap = map[uint8]string{
 	// 11-15 are reserved for future use
 }
 
-// DNSQuestion represents a question section in the DNS message
-type DNSQuestion struct {
-	QName       string
-	QNameLength int
-	QType       uint16
-	QClass      uint16
-}
-
 var QRMap = map[bool]string{
 	true:  "Response",
 	false: "Request",
 }
 
 var blocked = map[string]bool{
-	"apple.com":      true,
-	"www.apple.com":  true,
-	"www.apple.com.": true,
+	// "apple.com":      true,
+	// "www.apple.com":  true,
+	// "www.apple.com.": true,
 }
 
 var QTypeMap = map[uint16]string{
@@ -123,253 +67,40 @@ var QClassMap = map[uint16]string{
 	255: "ANY", // Any class
 }
 
-// DNSResourceRecord represents a resource record in the DNS message
-type DNSResourceRecord struct {
-	Name              string
-	Type              uint16
-	Class             uint16
-	TTL               uint32
-	CreationDate      time.Time
-	RDLength          uint16
-	RData             []byte
-	RDataUncompressed string
-}
+const UPSTREAM = "8.8.8.8:53" // Google's public DNS server
+const PORT = ":53"
+const HEADER_LENGTH = 12
 
-// ParseHeader parses a DNS header from a byte slice
-func ParseHeader(data []byte) DNSHeader {
-	header := DNSHeader{}
-	header.ID = binary.BigEndian.Uint16(data[0:2])
-
-	flags := binary.BigEndian.Uint16(data[2:4])
-	header.QR = (flags & 0x8000) != 0
-	header.Opcode = uint8((flags >> 11) & 0x0F)
-	header.AA = (flags & 0x0400) != 0
-	header.TC = (flags & 0x0200) != 0
-	header.RD = (flags & 0x0100) != 0
-	header.RA = (flags & 0x0080) != 0
-	header.Z = uint8((flags >> 4) & 0x7)
-	header.RCODE = uint8(flags & 0x0F)
-
-	header.QDCount = binary.BigEndian.Uint16(data[4:6])
-	header.ANCount = binary.BigEndian.Uint16(data[6:8])
-	header.NSCount = binary.BigEndian.Uint16(data[8:10])
-	header.ARCount = binary.BigEndian.Uint16(data[10:12])
-
-	return header
-}
-
-// ToBytes converts the DNSHeader struct back into a byte slice
-func (h *DNSHeader) ToBytes() []byte {
-	data := make([]byte, HEADER_LENGTH)
-
-	binary.BigEndian.PutUint16(data[0:2], h.ID)
-
-	var flags uint16
-	if h.QR {
-		flags |= 0x8000
+func main() {
+	// Resolve UDP address for the DNS server
+	udpAddr, err := net.ResolveUDPAddr("udp", "0.0.0.0"+PORT)
+	if err != nil {
+		log.Fatalf("Failed to resolve UDP address: %v", err)
 	}
-	flags |= (uint16(h.Opcode) & 0x0F) << 11
-	if h.AA {
-		flags |= 0x0400
-	}
-	if h.TC {
-		flags |= 0x0200
-	}
-	if h.RD {
-		flags |= 0x0100
-	}
-	if h.RA {
-		flags |= 0x0080
-	}
-	flags |= (uint16(h.Z) & 0x7) << 4
-	flags |= uint16(h.RCODE) & 0x0F
 
-	binary.BigEndian.PutUint16(data[2:4], flags)
-	binary.BigEndian.PutUint16(data[4:6], h.QDCount)
-	binary.BigEndian.PutUint16(data[6:8], h.ANCount)
-	binary.BigEndian.PutUint16(data[8:10], h.NSCount)
-	binary.BigEndian.PutUint16(data[10:12], h.ARCount)
+	// Start listening on the UDP address
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		log.Fatalf("Failed to start DNS server: %v", err)
+	}
+	defer conn.Close()
 
-	return data
-}
+	log.Printf("DNS server started on %s", PORT)
 
-// ParseQuestion parses the question section from a byte slice
-func ParseQuestion(data []byte, offset int) (DNSQuestion, int) {
-	question := DNSQuestion{}
-	startOffset := offset
-	// Read the QName (domain name)
-	var qnameParts []string
 	for {
-		length := int(data[offset])
-		if length == 0 {
-			offset++
-			break
-		}
-		offset++
-		qnameParts = append(qnameParts, string(data[offset:offset+length]))
-		offset += length
-	}
-	question.QNameLength = offset - startOffset
-	question.QName = strings.Join(qnameParts, ".")
+		// Buffer to store incoming DNS requests
+		buffer := make([]byte, 512)
 
-	// Read QType and QClass
-	question.QType = binary.BigEndian.Uint16(data[offset : offset+2])
-	question.QClass = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-	offset += 4
-
-	return question, offset
-}
-
-// ToBytes converts the DNSQuestion struct back into a byte slice
-func (q *DNSQuestion) ToBytes() []byte {
-	data := []byte{}
-
-	// Encode QName
-	for _, part := range strings.Split(q.QName, ".") {
-		if part == "" {
+		// Read incoming DNS request
+		n, addr, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			log.Printf("Failed to read DNS request: %v", err)
 			continue
 		}
-		data = append(data, byte(len(part)))
-		data = append(data, []byte(part)...)
+
+		// Handle the DNS request in a separate goroutine
+		go handleDNSRequest(conn, addr, buffer[:n])
 	}
-	data = append(data, 0) // End of QName
-
-	// Encode QType and QClass
-	qType := make([]byte, 2)
-	qClass := make([]byte, 2)
-	binary.BigEndian.PutUint16(qType, q.QType)
-	binary.BigEndian.PutUint16(qClass, q.QClass)
-
-	data = append(data, qType...)
-	data = append(data, qClass...)
-
-	return data
-}
-
-// ParseResourceRecord parses a resource record from a byte slice
-func ParseResourceRecord(data []byte, offset int) (DNSResourceRecord, int) {
-	record := DNSResourceRecord{}
-
-	// Read the Name (domain name) using message compression
-	record.Name, offset = readDomainName(data, offset)
-
-	// Read Type, Class, TTL, RDLength, and RData
-	record.Type = binary.BigEndian.Uint16(data[offset : offset+2])
-	record.Class = binary.BigEndian.Uint16(data[offset+2 : offset+4])
-	record.TTL = binary.BigEndian.Uint32(data[offset+4 : offset+8])
-	record.CreationDate = time.Now().UTC()
-	record.RDLength = binary.BigEndian.Uint16(data[offset+8 : offset+10])
-	offset += 10
-	record.RData = data[offset : offset+int(record.RDLength)]
-
-	if QTypeMap[record.Type] == "A" {
-		record.RDataUncompressed = byteArrayToString(record.RData)
-		offset += int(record.RDLength)
-	} else {
-		record.RDataUncompressed, offset = readDomainName(data, offset)
-	}
-
-	return record, offset
-}
-
-func bytesToFile(data []byte, offset int) {
-	fi, err := os.OpenFile("bytes.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatalf("Failed to open file: %v", err)
-	}
-	defer fi.Close()
-
-	_, err = fi.Write([]byte(fmt.Sprintf("ParseResourceRecord:%d:%x\n", offset, data)))
-
-	if err != nil {
-		log.Fatalf("Failed to write bytes to file: %v", err)
-	}
-}
-
-func byteArrayToString(data []byte) string {
-	if len(data) == 0 {
-		return ""
-	}
-
-	parts := make([]string, 4)
-	for i := 0; i < len(data); i++ {
-		parts[i] = strconv.Itoa(int(data[i]))
-	}
-	return strings.Join(parts, ".")
-}
-
-// readDomainName reads a domain name from the byte slice with support for message compression
-func readDomainName(data []byte, offset int) (string, int) {
-	var nameParts []string
-	if offset >= len(data) {
-		fmt.Printf("OOPS! offset exceeded data Length, looks like there's a bug\n")
-		return strings.Join(nameParts, "."), offset
-	}
-
-	length := int(data[offset]) //gets int 0-255 value of byte
-	if length == 0 {
-		offset++
-		return strings.Join(nameParts, "."), offset
-	}
-
-	// Check for the compression pointer (first two bits are 1s)
-	// Actual value will never be greater than 00111111, first 2 msb are used to indicate compression
-	// By doing bitwise & with 0xC0 (11000000) we can check if the first two bits are 1s if the results is 11000000
-	if length&0xC0 == 0xC0 {
-		// Read the offset of the compressed name, value is the loation of of the byte array to continue reading from
-		ptrOffset := int(binary.BigEndian.Uint16(data[offset:offset+2]) & 0x3FFF) // 0x3FF (1100000000000000) removes first 2 bits from 16 bit biary number
-		offset += 2                                                               //Move the main pointer forward after reading the compression poisition (2 bytes long)
-
-		// Recursively read the domain name from the pointer offset
-		compressedName, _ := readDomainName(data, ptrOffset)
-		nameParts = append(nameParts, compressedName)
-		return compressedName, offset
-	}
-
-	offset++
-	nameParts = append(nameParts, string(data[offset:offset+length]))
-	offset += length
-
-	if (offset + 1) <= len(data) {
-		nextName, nextOffset := readDomainName(data, offset)
-		offset = nextOffset
-		nameParts = append(nameParts, nextName)
-	}
-
-	return strings.Join(nameParts, "."), offset
-}
-
-// ToBytes converts the DNSResourceRecord struct back into a byte slice
-func (r *DNSResourceRecord) ToBytes() []byte {
-	data := []byte{}
-
-	// Encode Name
-	for _, part := range strings.Split(r.Name, ".") {
-		if part == "" {
-			continue
-		}
-		data = append(data, byte(len(part)))
-		data = append(data, []byte(part)...)
-	}
-	data = append(data, 0) // End of Name
-
-	// Encode Type, Class, TTL, RDLength, and RData
-	typeBytes := make([]byte, 2)
-	classBytes := make([]byte, 2)
-	ttlBytes := make([]byte, 4)
-	rdLengthBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(typeBytes, r.Type)
-	binary.BigEndian.PutUint16(classBytes, r.Class)
-	binary.BigEndian.PutUint32(ttlBytes, r.TTL)
-	binary.BigEndian.PutUint16(rdLengthBytes, r.RDLength)
-
-	data = append(data, typeBytes...)
-	data = append(data, classBytes...)
-	data = append(data, ttlBytes...)
-	data = append(data, rdLengthBytes...)
-	data = append(data, r.RData...)
-
-	return data
 }
 
 func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
@@ -505,57 +236,5 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	if err != nil {
 		log.Printf("Failed to send DNS response to client: %v", err)
 		return
-	}
-}
-
-const UPSTREAM = "8.8.8.8:53" // Google's public DNS server
-const PORT = ":53"
-const HEADER_LENGTH = 12
-
-func main() {
-	// Resolve UDP address for the DNS server
-	udpAddr, err := net.ResolveUDPAddr("udp", "0.0.0.0"+PORT)
-	if err != nil {
-		log.Fatalf("Failed to resolve UDP address: %v", err)
-	}
-
-	// Start listening on the UDP address
-	conn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		log.Fatalf("Failed to start DNS server: %v", err)
-	}
-	defer conn.Close()
-
-	log.Printf("DNS server started on %s", PORT)
-
-	for {
-		// Buffer to store incoming DNS requests
-		buffer := make([]byte, 512)
-
-		// Read incoming DNS request
-		n, addr, err := conn.ReadFromUDP(buffer)
-		if err != nil {
-			log.Printf("Failed to read DNS request: %v", err)
-			continue
-		}
-		//logRequest(buffer[:n])
-
-		// Handle the DNS request in a separate goroutine
-		go handleDNSRequest(conn, addr, buffer[:n])
-	}
-}
-
-func logRequest(buffer []byte) {
-	fi, err := os.OpenFile("request.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Println("Failed to open file request.txt")
-		return
-	}
-	defer fi.Close()
-
-	_, err = fi.Write(buffer)
-	fi.WriteString("###")
-	if err != nil {
-		log.Println("Failed to write to request.txt")
 	}
 }
