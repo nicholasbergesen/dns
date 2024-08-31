@@ -80,7 +80,6 @@ func (h *DNSHeader) ToBytes() []byte {
 func ParseQuestion(data []byte, offset int) (DNSQuestion, int) {
 	question := DNSQuestion{}
 	startOffset := offset
-	// Read the QName (domain name)
 	var qnameParts []string
 	for {
 		length := int(data[offset])

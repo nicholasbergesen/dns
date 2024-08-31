@@ -72,13 +72,11 @@ const PORT = ":53"
 const HEADER_LENGTH = 12
 
 func main() {
-	// Resolve UDP address for the DNS server
 	udpAddr, err := net.ResolveUDPAddr("udp", "0.0.0.0"+PORT)
 	if err != nil {
 		log.Fatalf("Failed to resolve UDP address: %v", err)
 	}
 
-	// Start listening on the UDP address
 	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
 		log.Fatalf("Failed to start DNS server: %v", err)
@@ -88,23 +86,19 @@ func main() {
 	log.Printf("DNS server started on %s", PORT)
 
 	for {
-		// Buffer to store incoming DNS requests
 		buffer := make([]byte, 512)
 
-		// Read incoming DNS request
 		n, addr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			log.Printf("Failed to read DNS request: %v", err)
 			continue
 		}
 
-		// Handle the DNS request in a separate goroutine
 		go handleDNSRequest(conn, addr, buffer[:n])
 	}
 }
 
 func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
-	// Parse the DNS header
 	message := DNSMessage{}
 	message.Header = ParseHeader(msg)
 	fmt.Printf("Received DNS Query ID: %d\n", message.Header.ID)
@@ -119,7 +113,6 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		return
 	}
 
-	// Parse the DNS question
 	offset := HEADER_LENGTH
 	for i := 0; i < int(message.Header.QDCount); i++ {
 		question, newOffset := ParseQuestion(msg, offset)
@@ -128,7 +121,6 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		offset = newOffset
 	}
 
-	// Check if the DNS query is in the cache
 	qName := message.Questions[0].QName
 	cacheValue, ok := cache[qName]
 
@@ -138,7 +130,6 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 			delete(cache, qName)
 			fmt.Printf("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
-			// Send the response back to the client
 			_, err := conn.WriteToUDP(cacheValue.ToBytes(), addr)
 			if err != nil {
 				log.Printf("Failed to send DNS response to client: %v", err)
@@ -176,14 +167,12 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		}
 		defer upstreamConn.Close()
 
-		// Send the request to the upstream DNS server
 		_, err = upstreamConn.Write(message.UpstreamBytes())
 		if err != nil {
 			log.Printf("Failed to send DNS request to upstream server: %v", err)
 			return
 		}
 
-		// Receive the response from the upstream DNS server
 		n, _, err = upstreamConn.ReadFromUDP(response)
 		if err != nil {
 			log.Printf("Failed to receive DNS response from upstream server: %v", err)
@@ -231,7 +220,6 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		cache[qName] = message
 	}
 
-	// Send the response back to the client
 	_, err := conn.WriteToUDP(response[:n], addr)
 	if err != nil {
 		log.Printf("Failed to send DNS response to client: %v", err)

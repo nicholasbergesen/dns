@@ -15,7 +15,6 @@ type DNSQuestion struct {
 func (q *DNSQuestion) ToBytes() []byte {
 	data := []byte{}
 
-	// Encode QName
 	for _, part := range strings.Split(q.QName, ".") {
 		if part == "" {
 			continue
@@ -23,9 +22,8 @@ func (q *DNSQuestion) ToBytes() []byte {
 		data = append(data, byte(len(part)))
 		data = append(data, []byte(part)...)
 	}
-	data = append(data, 0) // End of QName
+	data = append(data, 0)
 
-	// Encode QType and QClass
 	qType := make([]byte, 2)
 	qClass := make([]byte, 2)
 	binary.BigEndian.PutUint16(qType, q.QType)
