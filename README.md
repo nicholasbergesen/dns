@@ -6,7 +6,7 @@ This implementation attempts to create the simplest architecture shown below:
                                                Local Host          |  Foreign
                                                                    |
     +---------+               +----------+           +----------+  |  +--------+
-    |         | user queries  |          |queries    | filter   |  |  |        |
+    |         | user queries  |          |queries    |  filter  |  |  |        |
     |  User   |-------------->|          |---------->|  blocked |--|->|Foreign |
     | Program |               | Resolver |           +----------+  |  |  Name  |
     |         |<--------------|          |<------------------------|--| Server |
