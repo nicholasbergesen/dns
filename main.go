@@ -73,7 +73,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 
 		message.Questions = append(message.Questions, question)
 
-		if question.QType == 65 { //HTTP
+		if question.QType == 65 || question.QType == 28 { //HTTP, AAAA
 			logger.Write("  [%d] Refuse HTTP request for domain: %s\n", message.Header.ID, question.QName)
 			message.Header.RCODE = 5 // Refused
 			_, err := conn.WriteToUDP(message.ToBytes(), addr)

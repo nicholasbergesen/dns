@@ -37,6 +37,7 @@ var QTypeMap = map[uint16]string{
 	14:  "MINFO",
 	15:  "MX",
 	16:  "TXT",
+	28:  "AAAA", // IPv6 Address, not implemented, part of newer rfc
 	65:  "HTTP", //No implemented, part of newer rfc
 	252: "AXFR",
 	253: "MAILB",
