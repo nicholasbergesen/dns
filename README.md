@@ -19,4 +19,6 @@ This implementation attempts to create the simplest architecture shown below:
                               |  cache   |         |
                               +----------+         |
 
-Google's 8.8.8.8 name server is used as the foreign server.
+- Uses Google's 8.8.8.8 name server as the foreign server.
+- Use block.txt to add a list of urls to block, add each entry on a new line, only exact match supported.
+- Logs written to dns-{date}.log file
