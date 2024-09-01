@@ -1,18 +1,18 @@
-package main
+package dns
 
 import (
 	"encoding/binary"
 	"strings"
 )
 
-type DNSQuestion struct {
+type Question struct {
 	QName  string
 	QType  uint16
 	QClass uint16
 }
 
-func ParseQuestion(data []byte, offset *int) DNSQuestion {
-	question := DNSQuestion{}
+func ParseQuestion(data []byte, offset *int) Question {
+	question := Question{}
 	var qnameParts []string
 	for {
 		length := int(data[*offset])
@@ -34,7 +34,7 @@ func ParseQuestion(data []byte, offset *int) DNSQuestion {
 	return question
 }
 
-func (q *DNSQuestion) ToBytes() []byte {
+func (q *Question) ToBytes() []byte {
 	data := []byte{}
 
 	for _, part := range strings.Split(q.QName, ".") {

@@ -1,10 +1,10 @@
-package main
+package dns
 
 import (
 	"encoding/binary"
 )
 
-type DNSHeader struct {
+type Header struct {
 	ID      uint16
 	QR      bool
 	Opcode  uint8
@@ -20,8 +20,8 @@ type DNSHeader struct {
 	ARCount uint16
 }
 
-func ParseHeader(data []byte) DNSHeader {
-	header := DNSHeader{}
+func ParseHeader(data []byte) Header {
+	header := Header{}
 	header.ID = binary.BigEndian.Uint16(data[0:2])
 
 	flags := binary.BigEndian.Uint16(data[2:4])
@@ -42,7 +42,7 @@ func ParseHeader(data []byte) DNSHeader {
 	return header
 }
 
-func (h *DNSHeader) ToBytes() []byte {
+func (h *Header) ToBytes() []byte {
 	data := make([]byte, HEADER_LENGTH)
 
 	binary.BigEndian.PutUint16(data[0:2], h.ID)

@@ -18,6 +18,10 @@
 # vendor/
 .vscode/
 
+# Output files
+block.txt
+*.log
+
 # Go workspace file
 go.work
 go.work.sum

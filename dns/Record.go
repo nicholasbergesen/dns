@@ -1,4 +1,4 @@
-package main
+package dns
 
 import (
 	"encoding/binary"
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type DNSResourceRecord struct {
+type ResourceRecord struct {
 	Name              string
 	Type              uint16
 	Class             uint16
@@ -19,10 +19,10 @@ type DNSResourceRecord struct {
 	RDataUncompressed string
 }
 
-func ParseResourceRecord(data []byte, offset *int) DNSResourceRecord {
-	record := DNSResourceRecord{}
+func ParseResourceRecord(data []byte, offset *int) ResourceRecord {
+	record := ResourceRecord{}
 
-	record.Name = readDomainName(data, offset)
+	record.Name = ReadDomainName(data, offset)
 
 	record.Type = binary.BigEndian.Uint16(data[*offset : *offset+2])
 	record.Class = binary.BigEndian.Uint16(data[*offset+2 : *offset+4])
@@ -36,14 +36,14 @@ func ParseResourceRecord(data []byte, offset *int) DNSResourceRecord {
 		record.RDataUncompressed = byteArrayToString(record.RData)
 		*offset += int(record.RDLength)
 	} else {
-		record.RDataUncompressed = readDomainName(data, offset)
+		record.RDataUncompressed = ReadDomainName(data, offset)
 	}
 
 	return record
 }
 
 // readDomainName reads a domain name from the byte slice with support for message compression
-func readDomainName(data []byte, offset *int) string {
+func ReadDomainName(data []byte, offset *int) string {
 	var nameParts []string
 	if *offset >= len(data) {
 		fmt.Printf("OOPS! offset exceeded data Length, looks like there's a bug\n")
@@ -65,7 +65,7 @@ func readDomainName(data []byte, offset *int) string {
 		*offset += 2                                                                //Move the main pointer forward after reading the compression poisition (2 bytes long)
 
 		// Recursively read the domain name from the pointer offset
-		compressedName := readDomainName(data, &ptrOffset)
+		compressedName := ReadDomainName(data, &ptrOffset)
 		nameParts = append(nameParts, compressedName)
 		return compressedName
 	}
@@ -75,7 +75,7 @@ func readDomainName(data []byte, offset *int) string {
 	*offset += length
 
 	if (*offset + 1) <= len(data) {
-		nextName := readDomainName(data, offset)
+		nextName := ReadDomainName(data, offset)
 		nameParts = append(nameParts, nextName)
 	}
 
@@ -94,7 +94,7 @@ func byteArrayToString(data []byte) string {
 	return strings.Join(parts, ".")
 }
 
-func (r *DNSResourceRecord) ToBytes() []byte {
+func (r *ResourceRecord) ToBytes() []byte {
 	data := []byte{}
 
 	for _, part := range strings.Split(r.Name, ".") {

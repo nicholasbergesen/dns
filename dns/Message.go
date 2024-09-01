@@ -1,14 +1,16 @@
-package main
+package dns
 
 import "time"
 
-type DNSMessage struct {
-	Header    DNSHeader
-	Questions []DNSQuestion
-	Answers   []DNSResourceRecord
+type Message struct {
+	Header    Header
+	Questions []Question
+	Answers   []ResourceRecord
 }
 
-func (m *DNSMessage) IsExpired() bool {
+const HEADER_LENGTH = 12
+
+func (m *Message) IsExpired() bool {
 	if len(m.Answers) > 0 {
 		return true
 	}
@@ -23,7 +25,7 @@ func (m *DNSMessage) IsExpired() bool {
 	return false
 }
 
-func (m *DNSMessage) ToBytes() []byte {
+func (m *Message) ToBytes() []byte {
 	bytes := m.Header.ToBytes()
 	for _, question := range m.Questions {
 		bytes = append(bytes, question.ToBytes()...)
@@ -35,7 +37,7 @@ func (m *DNSMessage) ToBytes() []byte {
 	return bytes
 }
 
-func (m *DNSMessage) UpstreamBytes() []byte {
+func (m *Message) UpstreamBytes() []byte {
 	bytes := m.Header.ToBytes()
 	for _, question := range m.Questions {
 		bytes = append(bytes, question.ToBytes()...)
