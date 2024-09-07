@@ -33,7 +33,10 @@ func ParseResourceRecord(data []byte, offset *int) ResourceRecord {
 	record.RData = data[*offset : *offset+int(record.RDLength)]
 
 	if QTypeMap[record.Type] == "A" {
-		record.RDataUncompressed = byteArrayToString(record.RData)
+		record.RDataUncompressed = byteArrayToIPv4(record.RData)
+		*offset += int(record.RDLength)
+	} else if QTypeMap[record.Type] == "AAAA" {
+		record.RDataUncompressed = byteArrayToIPv6(record.RData)
 		*offset += int(record.RDLength)
 	} else {
 		record.RDataUncompressed = ReadDomainName(data, offset)
@@ -82,7 +85,7 @@ func ReadDomainName(data []byte, offset *int) string {
 	return strings.Join(nameParts, ".")
 }
 
-func byteArrayToString(data []byte) string {
+func byteArrayToIPv4(data []byte) string {
 	if len(data) == 0 {
 		return ""
 	}
@@ -92,6 +95,21 @@ func byteArrayToString(data []byte) string {
 		parts[i] = strconv.Itoa(int(data[i]))
 	}
 	return strings.Join(parts, ".")
+}
+
+func byteArrayToIPv6(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 16)
+	for i := 0; i < len(data); i++ {
+		parts[i] = fmt.Sprintf("%x", binary.BigEndian.Uint16(data[i:i+2]))
+		if (i+1)%2 == 0 {
+			parts[i] = parts[i] + ":"
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 func (r *ResourceRecord) ToBytes() []byte {

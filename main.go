@@ -36,7 +36,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	logger.Write("DNS server started on %s", PORT)
+	logger.Write("DNS server started on %s\n", PORT)
 
 	for {
 		buffer := make([]byte, 512)
@@ -72,16 +72,6 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 		logger.Write("  [%d] Handling question for: Name: %s Type: %s TypeLiteral: %d Class: %s \n", message.Header.ID, question.QName, dns.QTypeMap[question.QType], question.QType, dns.QClassMap[question.QClass])
 
 		message.Questions = append(message.Questions, question)
-
-		if question.QType == 65 || question.QType == 28 { //HTTP, AAAA
-			logger.Write("  [%d] Refuse HTTP request for domain: %s\n", message.Header.ID, question.QName)
-			message.Header.RCODE = 5 // Refused
-			_, err := conn.WriteToUDP(message.ToBytes(), addr)
-			if err != nil {
-				logger.Write("Failed to send DNS response to client: %v", err)
-			}
-			return
-		}
 
 		for i := 0; i < len(blocked); i++ {
 			if blocked[i] == question.QName {
