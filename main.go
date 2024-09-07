@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nicholasbergesen/dns/dns"
@@ -21,6 +22,13 @@ var logger = log.Log{FileName: "dns-{date}.log", ShowIncConsole: true}
 
 func main() {
 	logger.FormatDate()
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	exPath := filepath.Dir(ex)
+	logger.Write("Running from %s\n", exPath)
+
 	udpAddr, err := net.ResolveUDPAddr("udp", "0.0.0.0"+PORT)
 	if err != nil {
 		logger.Write("Failed to resolve UDP address: %v", err)
@@ -184,12 +192,12 @@ func LoadBlockedUrls() []string {
 	logger.Write("Items loaded from block.txt\n")
 	for {
 		line, _, err := reader.ReadLine()
-		logger.Write("%s\n", line)
 
 		if err != nil || line == nil {
 			break
 		}
 
+		logger.Write(" - %s\n", line)
 		lines = append(lines, string(line))
 	}
 	return lines
