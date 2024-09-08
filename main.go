@@ -5,6 +5,8 @@ import (
 )
 
 func main() {
-	udpServer := dns.UdpServer{}
-	udpServer.Start()
+	// udpServer := dns.UdpServer{}
+	// udpServer.Start()
+	httpServer := dns.HttpServer{}
+	httpServer.Start()
 }
