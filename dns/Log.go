@@ -1,4 +1,4 @@
-package log
+package dns
 
 import (
 	"fmt"
