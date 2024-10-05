@@ -189,7 +189,7 @@ func LoadBlockedUrls() []string {
 	}
 
 	reader := bufio.NewReader(file)
-	logger.Write("Items loaded from block.txt\n")
+	logger.Write("Loading items from block.txt\n")
 	for {
 		line, _, err := reader.ReadLine()
 
@@ -197,8 +197,8 @@ func LoadBlockedUrls() []string {
 			break
 		}
 
-		logger.Write(" - %s\n", line)
 		lines = append(lines, string(line))
 	}
+	logger.Write("%d block urls loaded\n", len(lines))
 	return lines
 }
