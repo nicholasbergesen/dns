@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nicholasbergesen/dns/dns"
@@ -46,4 +47,48 @@ func TestFailedRequest(t *testing.T) {
 	t.Logf("Bytes: %d", len(bytes))
 	t.Logf("ID: %d", message.Header.ID)
 	handleDNSRequest(nil, nil, bytes)
+}
+// Test parsing of SVCB/HTTPS records to ensure they don't show corrupted characters
+func TestSVCBRecordParsing(t *testing.T) {
+	// Simulated SVCB record with binary RData that should not be parsed as domain name
+	// This simulates the problematic record from the logs
+	bytes := []byte{
+		// Minimal DNS message with SVCB record
+		0x00, 0x01, // ID
+		0x80, 0x00, // Flags (response)
+		0x00, 0x00, // QDCount
+		0x00, 0x01, // ANCount
+		0x00, 0x00, // NSCount  
+		0x00, 0x00, // ARCount
+		// Answer record starts here
+		0x04, 0x5f, 0x64, 0x6e, 0x73, // "_dns"
+		0x08, 0x72, 0x65, 0x73, 0x6f, 0x6c, 0x76, 0x65, 0x72, // "resolver" 
+		0x04, 0x61, 0x72, 0x70, 0x61, // "arpa"
+		0x00, // end of name
+		0x00, 0x40, // Type 64 (SVCB)
+		0x00, 0x01, // Class IN
+		0x00, 0x01, 0x51, 0x80, // TTL
+		0x00, 0x16, // RDLength (22 bytes)
+		// RData - binary data that should not be parsed as domain name
+		0x00, 0x01, 0x02, 0x68, 0x32, 0x02, 0x68, 0x33,
+		0x04, 0x2f, 0x64, 0x6e, 0x73, 0x2d, 0x71, 0x75,
+		0x65, 0x72, 0x79, 0x7b, 0x3f, 0x64,
+	}
+	
+	offset := 12 // Skip header
+	record := dns.ParseResourceRecord(bytes, &offset)
+	
+	t.Logf("Record Name: %s", record.Name)
+	t.Logf("Record Type: %s", dns.QTypeMap[record.Type])
+	t.Logf("RData: %s", record.RDataUncompressed)
+	
+	// Verify that RData is displayed as hex instead of corrupted characters
+	if record.Type == 64 { // SVCB
+		if !strings.Contains(record.RDataUncompressed, "hex:") {
+			t.Errorf("SVCB record should display RData as hex, got: %s", record.RDataUncompressed)
+		}
+		if strings.Contains(record.RDataUncompressed, "♥") || strings.Contains(record.RDataUncompressed, "♠") {
+			t.Errorf("SVCB record contains corrupted characters: %s", record.RDataUncompressed)
+		}
+	}
 }

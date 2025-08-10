@@ -32,13 +32,23 @@ func ParseResourceRecord(data []byte, offset *int) ResourceRecord {
 	*offset += 10
 	record.RData = data[*offset : *offset+int(record.RDLength)]
 
-	if QTypeMap[record.Type] == "A" {
+	recordType := QTypeMap[record.Type]
+	
+	if recordType == "A" {
 		record.RDataUncompressed = byteArrayToIPv4(record.RData)
 		*offset += int(record.RDLength)
-	} else if QTypeMap[record.Type] == "AAAA" {
+	} else if recordType == "AAAA" {
 		record.RDataUncompressed = byteArrayToIPv6(record.RData)
 		*offset += int(record.RDLength)
+	} else if recordType == "CNAME" || recordType == "NS" || recordType == "PTR" {
+		// These record types contain domain names
+		record.RDataUncompressed = ReadDomainName(data, offset)
+	} else if recordType == "SVCB" || recordType == "HTTPS" || recordType == "" {
+		// For SVCB, HTTPS, or unknown record types, display RData as hex
+		record.RDataUncompressed = fmt.Sprintf("(hex: %x)", record.RData)
+		*offset += int(record.RDLength)
 	} else {
+		// For other known types that contain domain names (SOA, MX, etc.)
 		record.RDataUncompressed = ReadDomainName(data, offset)
 	}
 
@@ -74,7 +84,28 @@ func ReadDomainName(data []byte, offset *int) string {
 	}
 
 	*offset++
-	nameParts = append(nameParts, string(data[*offset:*offset+length]))
+	// Check if we would read beyond the data length
+	if *offset+length > len(data) {
+		fmt.Printf("Warning: domain name length exceeds data bounds, truncating\n")
+		length = len(data) - *offset
+		if length <= 0 {
+			return strings.Join(nameParts, ".")
+		}
+	}
+	
+	// Extract the label and validate it contains printable characters
+	labelBytes := data[*offset : *offset+length]
+	label := ""
+	for _, b := range labelBytes {
+		// Only include printable ASCII characters, replace others with '?'
+		if b >= 32 && b <= 126 {
+			label += string(b)
+		} else {
+			label += "?"
+		}
+	}
+	
+	nameParts = append(nameParts, label)
 	*offset += length
 
 	if (*offset + 1) <= len(data) {
