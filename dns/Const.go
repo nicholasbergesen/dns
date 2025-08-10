@@ -38,7 +38,8 @@ var QTypeMap = map[uint16]string{
 	15:  "MX",
 	16:  "TXT",
 	28:  "AAAA", // IPv6 Address, not implemented, part of newer rfc
-	65:  "HTTP", //No implemented, part of newer rfc
+	64:  "SVCB", // Service Binding (RFC 9460)
+	65:  "HTTPS", // HTTPS Service Binding (RFC 9460)
 	252: "AXFR",
 	253: "MAILB",
 	254: "MAILA", // Obsolete
