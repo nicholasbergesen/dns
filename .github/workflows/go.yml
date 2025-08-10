@@ -6,28 +6,61 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+
 jobs:
   build:
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        include:
+          - os: ubuntu-latest
+            ext: ""
+          - os: macos-latest
+            ext: ""
+          - os: windows-latest
+            ext: ".exe"
+
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.23'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Prefer to read the version from go.mod for reliability
+          go-version-file: go.mod
+          # Or, if you really intend to pin, replace the above with:
+          # go-version: '1.23'
+          cache: true
 
-    - name: Test
-      run: go test -v ./...
-      
-    - name: Build
-      run: go build -v ./...
+      - name: Go env
+        run: go env
 
-    - name: Upload a Build Artifact
-      uses: actions/upload-artifact@v4.4.0
-      with:
-        name: dns-${{ matrix.os }}
-        path: dns.exe
+      - name: Test
+        run: go test -v ./...
+
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Adjust MAIN_PKG if your main package lives elsewhere (e.g. ./cmd/dns)
+          MAIN_PKG=.
+          BINARY_BASE=dns
+          OUTPUT="${BINARY_BASE}-${{ matrix.os }}${{ matrix.ext }}"
+          echo "Building ${OUTPUT} from ${MAIN_PKG}"
+          # Optionally disable CGO for fully static (Linux) builds; remove if you need CGO.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            export CGO_ENABLED=0
+          fi
+          go build -trimpath -ldflags="-s -w" -o "$OUTPUT" "$MAIN_PKG"
+          ls -l "$OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dns-${{ matrix.os }}
+          path: dns-${{ matrix.os }}${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 7
