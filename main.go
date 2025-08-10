@@ -27,12 +27,11 @@ var cache = make(map[string]dns.Message, 10000)
 var blocked []string
 
 const UPSTREAM = "8.8.8.8:53" // Google's public DNS server
-const DOH_PATH = "/dns-query"  // DOH endpoint path
+const DOH_PATH = "/dns-query"
 
 var logger = log.Log{FileName: "dns-{date}.log", ShowIncConsole: true}
 var dohUpstream = doh.NewDOHUpstream(doh.DefaultDOHUpstream)
 
-// Command line flags
 var (
 	udpPort   = flag.String("udp-port", ":53", "UDP port for traditional DNS")
 	httpsPort = flag.String("https-port", ":8443", "HTTPS port for DOH")
@@ -42,7 +41,7 @@ var (
 
 func main() {
 	flag.Parse()
-	
+
 	logger.FormatDate()
 	ex, err := os.Executable()
 	if err != nil {
@@ -53,7 +52,6 @@ func main() {
 
 	blocked = LoadBlockedUrls()
 
-	// Start servers based on flags
 	if *enableUDP {
 		go startUDPServer()
 	}
@@ -64,7 +62,6 @@ func main() {
 		logger.Write("Neither UDP nor DOH enabled, exiting\n")
 		return
 	} else {
-		// If only UDP is enabled, block main thread
 		select {}
 	}
 }
@@ -102,7 +99,6 @@ func startHTTPSServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc(DOH_PATH, handleDOHRequest)
 
-	// Generate self-signed certificate for testing
 	cert := generateSelfSignedCert()
 
 	server := &http.Server{
@@ -123,14 +119,12 @@ func startHTTPSServer() {
 }
 
 func generateSelfSignedCert() tls.Certificate {
-	// Generate private key
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		logger.Write("Failed to generate private key: %v", err)
 		panic(err)
 	}
 
-	// Create certificate template
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
@@ -141,28 +135,25 @@ func generateSelfSignedCert() tls.Certificate {
 			StreetAddress: []string{""},
 			PostalCode:    []string{""},
 		},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-		DNSNames:     []string{"localhost"},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		DNSNames:    []string{"localhost"},
 	}
 
-	// Create certificate
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
 	if err != nil {
 		logger.Write("Failed to create certificate: %v", err)
 		panic(err)
 	}
 
-	// Create tls.Certificate
 	cert := tls.Certificate{
 		Certificate: [][]byte{certDER},
 		PrivateKey:  privateKey,
 	}
 
-	// Save certificate and key for debugging
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
 
@@ -265,7 +256,6 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 }
 
 func GetUpstreamResponse(message dns.Message) ([]byte, int) {
-	// Forward the request to the upstream DNS server
 	upstreamAddr, err := net.ResolveUDPAddr("udp", UPSTREAM)
 	if err != nil {
 		logger.Write("Failed to resolve upstream DNS server address: %v", err)
@@ -297,7 +287,6 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 	var queryBytes []byte
 	var err error
 
-	// Handle different HTTP methods
 	switch r.Method {
 	case "GET":
 		queryBytes, err = doh.HandleGETRequest(w, r)
@@ -316,7 +305,6 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate DNS query
 	err = doh.ValidateDNSQuery(queryBytes)
 	if err != nil {
 		logger.Write("Invalid DOH DNS query: %v", err)
@@ -324,13 +312,11 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse the DNS message
 	message := dns.Message{}
 	message.Header = dns.ParseHeader(queryBytes)
 	offset := dns.HEADER_LENGTH
 	logger.Write("Received DOH %s from client ID: %d\n", strings.ToLower(dns.QRMap[message.Header.QR]), message.Header.ID)
 
-	// Basic validation
 	if message.Header.Opcode > 2 {
 		logger.Write("  [%d] Opcode %d not supported\n", message.Header.ID, message.Header.Opcode)
 		http.Error(w, "Opcode not supported", http.StatusNotImplemented)
@@ -343,18 +329,16 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse questions
 	for i := 0; i < int(message.Header.QDCount); i++ {
 		question := dns.ParseQuestion(queryBytes, &offset)
 		logger.Write("  [%d] Handling DOH question for: Name: %s Type: %s TypeLiteral: %d Class: %s \n", message.Header.ID, question.QName, dns.QTypeMap[question.QType], question.QType, dns.QClassMap[question.QClass])
 
 		message.Questions = append(message.Questions, question)
 
-		// Check blocked domains
 		for i := 0; i < len(blocked); i++ {
 			if blocked[i] == question.QName {
 				logger.Write("  [%d] Blocked domain: %s\n", message.Header.ID, question.QName)
-				message.Header.RCODE = 3 // NXDomain
+				message.Header.RCODE = 3
 				doh.SendDNSResponse(w, message.ToBytes())
 				return
 			}
@@ -364,7 +348,6 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 	qName := message.Questions[0].QName
 	cacheValue, isInCache := cache[qName]
 
-	// Check cache
 	if isInCache {
 		if cacheValue.IsExpired() {
 			delete(cache, qName)
@@ -377,7 +360,6 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Forward to DOH upstream
 	response, err := dohUpstream.QueryDOH(queryBytes)
 	if err != nil {
 		logger.Write("Failed to query DOH upstream: %v", err)
@@ -385,19 +367,15 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse response for caching
 	responseHeader := dns.ParseHeader(response[:dns.HEADER_LENGTH])
 	logger.Write("  [%d] Received %s %s from DOH upstream server.\n", responseHeader.ID, dns.RCodeMap[responseHeader.RCODE], strings.ToLower(dns.QRMap[responseHeader.QR]))
 	logger.Write("  [%d] Results QDCount (Expect 1):%d ANCount:%d NSCount:%d ARCount:%d \n", responseHeader.ID, responseHeader.QDCount, responseHeader.ANCount, responseHeader.NSCount, responseHeader.ARCount)
 
-	// Parse answers for caching
 	if responseHeader.RCODE == 0 {
 		respOffset := dns.HEADER_LENGTH
-		// Skip questions in response
 		for i := 0; i < int(responseHeader.QDCount); i++ {
 			dns.ParseQuestion(response, &respOffset)
 		}
-		// Parse answers
 		for i := 0; i < int(responseHeader.ANCount); i++ {
 			record := dns.ParseResourceRecord(response, &respOffset)
 			message.Answers = append(message.Answers, record)
@@ -405,13 +383,11 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Cache the response
 	if !isInCache {
 		message.Header = responseHeader
 		cache[qName] = message
 	}
 
-	// Send response
 	doh.SendDNSResponse(w, response)
 }
 
