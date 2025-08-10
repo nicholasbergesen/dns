@@ -21,6 +21,12 @@
 # Output files
 block.txt
 *.log
+dns-server
+dns
+
+# Test certificates
+server.crt
+server.key
 
 # Go workspace file
 go.work
