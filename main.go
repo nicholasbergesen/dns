@@ -31,7 +31,7 @@ var blockedMutex sync.RWMutex
 
 const UPSTREAM = "8.8.8.8:53" // Google's public DNS server
 const DOH_PATH = "/dns-query"
-const MAX_CACHE_SIZE = 10000
+const MAX_CACHE_SIZE = 100000
 
 var logger = log.Log{FileName: "dns-{date}.log", ShowIncConsole: true}
 var dohUpstream = doh.NewDOHUpstream(doh.DefaultDOHUpstream)
