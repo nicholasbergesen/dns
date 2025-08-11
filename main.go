@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nicholasbergesen/dns/dns"
@@ -24,10 +25,13 @@ import (
 )
 
 var cache = make(map[string]dns.Message, 10000)
+var cacheMutex sync.RWMutex
 var blocked []string
+var blockedMutex sync.RWMutex
 
 const UPSTREAM = "8.8.8.8:53" // Google's public DNS server
 const DOH_PATH = "/dns-query"
+const MAX_CACHE_SIZE = 10000
 
 var logger = log.Log{FileName: "dns-{date}.log", ShowIncConsole: true}
 var dohUpstream = doh.NewDOHUpstream(doh.DefaultDOHUpstream)
@@ -43,14 +47,20 @@ func main() {
 	flag.Parse()
 
 	logger.FormatDate()
+	var exPath string
 	ex, err := os.Executable()
 	if err != nil {
-		panic(err)
+		logger.Write("Failed to get executable path: %v\n", err)
+		exPath = "."
+	} else {
+		exPath = filepath.Dir(ex)
 	}
-	exPath := filepath.Dir(ex)
 	logger.Write("Running from %s\n", exPath)
 
-	blocked = LoadBlockedUrls()
+	blockedUrls := LoadBlockedUrls()
+	blockedMutex.Lock()
+	blocked = blockedUrls
+	blockedMutex.Unlock()
 
 	if *enableUDP {
 		go startUDPServer()
@@ -100,6 +110,12 @@ func startHTTPSServer() {
 	mux.HandleFunc(DOH_PATH, handleDOHRequest)
 
 	cert := generateSelfSignedCert()
+	
+	// Check if certificate generation failed
+	if len(cert.Certificate) == 0 {
+		logger.Write("Failed to generate certificate, DOH server cannot start\n")
+		return
+	}
 
 	server := &http.Server{
 		Addr:    "0.0.0.0" + *httpsPort,
@@ -122,7 +138,8 @@ func generateSelfSignedCert() tls.Certificate {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		logger.Write("Failed to generate private key: %v", err)
-		panic(err)
+		// Return empty certificate and let the caller handle the error
+		return tls.Certificate{}
 	}
 
 	template := x509.Certificate{
@@ -146,7 +163,7 @@ func generateSelfSignedCert() tls.Certificate {
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
 	if err != nil {
 		logger.Write("Failed to create certificate: %v", err)
-		panic(err)
+		return tls.Certificate{}
 	}
 
 	cert := tls.Certificate{
@@ -187,25 +204,29 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 
 		message.Questions = append(message.Questions, question)
 
-		for i := 0; i < len(blocked); i++ {
-			if blocked[i] == question.QName {
-				logger.Write("  [%d] Blocked domain: %s\n", message.Header.ID, question.QName)
-				message.Header.RCODE = 3 // NXDomain
-				_, err := conn.WriteToUDP(message.ToBytes(), addr)
-				if err != nil {
-					logger.Write("Failed to send DNS response to client: %v", err)
-				}
-				return
+		if isBlocked(question.QName) {
+			logger.Write("  [%d] Blocked domain: %s\n", message.Header.ID, question.QName)
+			message.Header.RCODE = 3 // NXDomain
+			_, err := conn.WriteToUDP(message.ToBytes(), addr)
+			if err != nil {
+				logger.Write("Failed to send DNS response to client: %v", err)
 			}
+			return
 		}
 	}
 
+	// Check if we have any questions to process
+	if len(message.Questions) == 0 {
+		logger.Write("  [%d] No questions in request\n", message.Header.ID)
+		return
+	}
+
 	qName := message.Questions[0].QName
-	cacheValue, isInCache := cache[qName]
+	cacheValue, isInCache := getCacheEntry(qName)
 
 	if isInCache {
 		if cacheValue.IsExpired() {
-			delete(cache, qName)
+			deleteCacheEntry(qName)
 			logger.Write("  [%d] Cache entry expired, fetching from foreign server for %s\n", cacheValue.Header.ID, qName)
 		} else {
 			cacheValue.Header.ID = message.Header.ID
@@ -245,7 +266,7 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 	}
 
 	if !isInCache {
-		cache[qName] = message
+		setCacheEntry(qName, message)
 	}
 
 	_, err := conn.WriteToUDP(response[:n], addr)
@@ -267,6 +288,9 @@ func GetUpstreamResponse(message dns.Message) ([]byte, int) {
 		return nil, 0
 	}
 	defer upstreamConn.Close()
+
+	// Set timeout for upstream operations
+	upstreamConn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	_, err = upstreamConn.Write(message.UpstreamBytes())
 	response := make([]byte, 512)
@@ -335,22 +359,27 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 
 		message.Questions = append(message.Questions, question)
 
-		for i := 0; i < len(blocked); i++ {
-			if blocked[i] == question.QName {
-				logger.Write("  [%d] Blocked domain: %s\n", message.Header.ID, question.QName)
-				message.Header.RCODE = 3
-				doh.SendDNSResponse(w, message.ToBytes())
-				return
-			}
+		if isBlocked(question.QName) {
+			logger.Write("  [%d] Blocked domain: %s\n", message.Header.ID, question.QName)
+			message.Header.RCODE = 3
+			doh.SendDNSResponse(w, message.ToBytes())
+			return
 		}
 	}
 
+	// Check if we have any questions to process
+	if len(message.Questions) == 0 {
+		logger.Write("  [%d] No questions in DOH request\n", message.Header.ID)
+		http.Error(w, "No questions in request", http.StatusBadRequest)
+		return
+	}
+
 	qName := message.Questions[0].QName
-	cacheValue, isInCache := cache[qName]
+	cacheValue, isInCache := getCacheEntry(qName)
 
 	if isInCache {
 		if cacheValue.IsExpired() {
-			delete(cache, qName)
+			deleteCacheEntry(qName)
 			logger.Write("  [%d] Cache entry expired, fetching from DOH upstream for %s\n", cacheValue.Header.ID, qName)
 		} else {
 			cacheValue.Header.ID = message.Header.ID
@@ -385,7 +414,7 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 
 	if !isInCache {
 		message.Header = responseHeader
-		cache[qName] = message
+		setCacheEntry(qName, message)
 	}
 
 	doh.SendDNSResponse(w, response)
@@ -394,12 +423,11 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 func LoadBlockedUrls() []string {
 	var lines []string
 	file, err := os.OpenFile("block.txt", os.O_RDONLY, fs.ModeAppend)
-	defer file.Close()
-
 	if err != nil {
 		logger.Write("No block.txt found\n")
 		return lines
 	}
+	defer file.Close()
 
 	reader := bufio.NewReader(file)
 	logger.Write("Loading items from block.txt\n")
@@ -414,4 +442,44 @@ func LoadBlockedUrls() []string {
 	}
 	logger.Write("%d block urls loaded\n", len(lines))
 	return lines
+}
+
+// Safe cache operations with size management
+func getCacheEntry(key string) (dns.Message, bool) {
+	cacheMutex.RLock()
+	defer cacheMutex.RUnlock()
+	val, exists := cache[key]
+	return val, exists
+}
+
+func setCacheEntry(key string, message dns.Message) {
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+	
+	// If cache is full, remove oldest entries (simple LRU approximation)
+	if len(cache) >= MAX_CACHE_SIZE {
+		// Remove first entry found (not true LRU but prevents unbounded growth)
+		for k := range cache {
+			delete(cache, k)
+			break
+		}
+	}
+	cache[key] = message
+}
+
+func deleteCacheEntry(key string) {
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+	delete(cache, key)
+}
+
+func isBlocked(domain string) bool {
+	blockedMutex.RLock()
+	defer blockedMutex.RUnlock()
+	for i := 0; i < len(blocked); i++ {
+		if blocked[i] == domain {
+			return true
+		}
+	}
+	return false
 }

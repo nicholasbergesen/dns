@@ -11,13 +11,13 @@ type Message struct {
 const HEADER_LENGTH = 12
 
 func (m *Message) IsExpired() bool {
-	if len(m.Answers) > 0 {
+	if len(m.Answers) == 0 {
 		return true
 	}
 
 	now := time.Now().UTC()
 	for i := 0; i < len(m.Answers); i++ {
-		if now.After(m.Answers[i].CreationDate.Add(time.Duration(m.Answers[0].TTL) * time.Second)) {
+		if now.After(m.Answers[i].CreationDate.Add(time.Duration(m.Answers[i].TTL) * time.Second)) {
 			return true
 		}
 	}
