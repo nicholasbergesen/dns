@@ -76,7 +76,10 @@ func TestSVCBRecordParsing(t *testing.T) {
 	}
 	
 	offset := 12 // Skip header
-	record := dns.ParseResourceRecord(bytes, &offset)
+	record, err := dns.ParseResourceRecord(bytes, &offset)
+	if err != nil {
+		t.Fatalf("Failed to parse resource record: %v", err)
+	}
 	
 	t.Logf("Record Name: %s", record.Name)
 	t.Logf("Record Type: %s", dns.QTypeMap[record.Type])
@@ -90,5 +93,50 @@ func TestSVCBRecordParsing(t *testing.T) {
 		if strings.Contains(record.RDataUncompressed, "♥") || strings.Contains(record.RDataUncompressed, "♠") {
 			t.Errorf("SVCB record contains corrupted characters: %s", record.RDataUncompressed)
 		}
+	}
+}
+
+func TestParseResourceRecordWithMalformedData(t *testing.T) {
+	// Test with data that has insufficient bytes for RDLength
+	malformedBytes := []byte{
+		// Name: _dns.resolver.arpa.
+		0x04, 0x5f, 0x64, 0x6e, 0x73, 0x08, 0x72, 0x65,
+		0x73, 0x6f, 0x6c, 0x76, 0x65, 0x72, 0x04, 0x61,
+		0x72, 0x70, 0x61, 0x00,
+		// Type: SVCB (64)
+		0x00, 0x40,
+		// Class: IN (1)
+		0x00, 0x01,
+		// TTL
+		0x00, 0x01, 0x51, 0x80,
+		// RDLength claiming 100 bytes but data is much shorter
+		0x00, 0x64, // 100 bytes claimed
+		// Only 5 bytes of actual data
+		0x00, 0x01, 0x02, 0x68, 0x32,
+	}
+	
+	offset := 0
+	
+	// This should now return an error instead of panicking
+	record, err := dns.ParseResourceRecord(malformedBytes, &offset)
+	if err == nil {
+		t.Errorf("Expected error when parsing malformed data, but got none. Record: %+v", record)
+	} else {
+		t.Logf("ParseResourceRecord correctly returned error: %v", err)
+	}
+	
+	// Test with insufficient data for fixed fields
+	shortBytes := []byte{
+		0x04, 0x74, 0x65, 0x73, 0x74, 0x00, // name "test"
+		0x00, 0x01, // type
+		// Missing class, TTL, and RDLength
+	}
+	
+	offset = 0
+	record, err = dns.ParseResourceRecord(shortBytes, &offset)
+	if err == nil {
+		t.Errorf("Expected error when parsing data with insufficient fixed fields, but got none. Record: %+v", record)
+	} else {
+		t.Logf("ParseResourceRecord correctly returned error for insufficient data: %v", err)
 	}
 }
