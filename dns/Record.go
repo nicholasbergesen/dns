@@ -19,10 +19,15 @@ type ResourceRecord struct {
 	RDataUncompressed string
 }
 
-func ParseResourceRecord(data []byte, offset *int) ResourceRecord {
+func ParseResourceRecord(data []byte, offset *int) (ResourceRecord, error) {
 	record := ResourceRecord{}
 
 	record.Name = ReadDomainName(data, offset)
+
+	// Check if we have enough data for the fixed fields
+	if *offset+10 > len(data) {
+		return record, fmt.Errorf("insufficient data for resource record fixed fields: need %d bytes, have %d", *offset+10, len(data))
+	}
 
 	record.Type = binary.BigEndian.Uint16(data[*offset : *offset+2])
 	record.Class = binary.BigEndian.Uint16(data[*offset+2 : *offset+4])
@@ -30,6 +35,12 @@ func ParseResourceRecord(data []byte, offset *int) ResourceRecord {
 	record.CreationDate = time.Now().UTC()
 	record.RDLength = binary.BigEndian.Uint16(data[*offset+8 : *offset+10])
 	*offset += 10
+
+	// Check if we have enough data for RData
+	if *offset+int(record.RDLength) > len(data) {
+		return record, fmt.Errorf("insufficient data for RData: need %d bytes, have %d", *offset+int(record.RDLength), len(data))
+	}
+
 	record.RData = data[*offset : *offset+int(record.RDLength)]
 
 	recordType := QTypeMap[record.Type]
@@ -52,7 +63,7 @@ func ParseResourceRecord(data []byte, offset *int) ResourceRecord {
 		record.RDataUncompressed = ReadDomainName(data, offset)
 	}
 
-	return record
+	return record, nil
 }
 
 // readDomainName reads a domain name from the byte slice with support for message compression

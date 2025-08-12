@@ -247,19 +247,31 @@ func handleDNSRequest(conn *net.UDPConn, addr *net.UDPAddr, msg []byte) {
 
 	if responseHeader.RCODE == 0 {
 		for i := 0; i < int(responseHeader.ANCount); i++ {
-			record := dns.ParseResourceRecord(response, &offset)
+			record, err := dns.ParseResourceRecord(response, &offset)
+			if err != nil {
+				logger.Write("  [%d] Error parsing AN record %d: %v\n", responseHeader.ID, i, err)
+				continue
+			}
 			message.Answers = append(message.Answers, record)
 			logger.Write("  [%d]   AN Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, dns.QTypeMap[record.Type], dns.QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
 		}
 
 		for i := 0; i < int(responseHeader.NSCount); i++ {
-			var record = dns.ParseResourceRecord(response, &offset)
+			record, err := dns.ParseResourceRecord(response, &offset)
+			if err != nil {
+				logger.Write("  [%d] Error parsing NS record %d: %v\n", responseHeader.ID, i, err)
+				continue
+			}
 			message.Answers = append(message.Answers, record)
 			logger.Write("  [%d]   NS Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, dns.QTypeMap[record.Type], dns.QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
 		}
 
 		for i := 0; i < int(responseHeader.ARCount); i++ {
-			var record = dns.ParseResourceRecord(response, &offset)
+			record, err := dns.ParseResourceRecord(response, &offset)
+			if err != nil {
+				logger.Write("  [%d] Error parsing AR record %d: %v\n", responseHeader.ID, i, err)
+				continue
+			}
 			message.Answers = append(message.Answers, record)
 			logger.Write("  [%d]   ARC Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, dns.QTypeMap[record.Type], dns.QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
 		}
@@ -406,7 +418,11 @@ func handleDOHRequest(w http.ResponseWriter, r *http.Request) {
 			dns.ParseQuestion(response, &respOffset)
 		}
 		for i := 0; i < int(responseHeader.ANCount); i++ {
-			record := dns.ParseResourceRecord(response, &respOffset)
+			record, err := dns.ParseResourceRecord(response, &respOffset)
+			if err != nil {
+				logger.Write("  [%d] Error parsing AN record %d: %v\n", responseHeader.ID, i, err)
+				continue
+			}
 			message.Answers = append(message.Answers, record)
 			logger.Write("  [%d]   AN Answer for: Name: %s Type: %s Class: %s TTL: %d RDLength: %d RData: %s\n", responseHeader.ID, record.Name, dns.QTypeMap[record.Type], dns.QClassMap[record.Class], record.TTL, record.RDLength, record.RDataUncompressed)
 		}
